@@ -8,7 +8,7 @@ import {
 
 declare global {
   interface Window {
-    wp?: { apiFetch?: (opts: { path: string; method?: string; data?: unknown; headers?: Record<string, string> }) => Promise<unknown> };
+    wp?: { apiFetch?: (opts: { path: string; method?: string; data?: unknown; headers?: Record<string, string>; parse?: boolean }) => Promise<unknown> };
   }
 }
 
@@ -62,11 +62,29 @@ async function routeToWp(req: BridgeRequest): Promise<unknown> {
   const headers = { 'X-WP-Nonce': nonce };
 
   switch (req.method) {
-    case 'site.info':
-      return af({ path: '/', headers });
+    case 'site.info': {
+      const raw = await af({ path: '/', headers }) as Record<string, unknown>;
+      return {
+        title:       raw.name,
+        description: raw.description,
+        url:         raw.url,
+        admin_email: raw.email,
+        language:    raw.language,
+        timezone:    raw.timezone_string,
+        gmt_offset:  raw.gmt_offset,
+        date_format: raw.date_format,
+        time_format: raw.time_format,
+      };
+    }
     case 'posts.list': {
       const q = (req.params ?? {}) as Record<string, unknown>;
-      return af({ path: '/wp/v2/posts?' + new URLSearchParams(q as Record<string, string>).toString(), headers });
+      const resp = await af({ path: '/wp/v2/posts?' + new URLSearchParams(q as Record<string, string>).toString(), headers, parse: false }) as Response;
+      const items = await resp.json();
+      return {
+        items,
+        total:       parseInt(resp.headers.get('X-WP-Total') ?? '0', 10),
+        total_pages: parseInt(resp.headers.get('X-WP-TotalPages') ?? '0', 10),
+      };
     }
     case 'posts.get': {
       const { id } = req.params as { id: number };
@@ -74,7 +92,13 @@ async function routeToWp(req: BridgeRequest): Promise<unknown> {
     }
     case 'pages.list': {
       const q = (req.params ?? {}) as Record<string, unknown>;
-      return af({ path: '/wp/v2/pages?' + new URLSearchParams(q as Record<string, string>).toString(), headers });
+      const resp = await af({ path: '/wp/v2/pages?' + new URLSearchParams(q as Record<string, string>).toString(), headers, parse: false }) as Response;
+      const items = await resp.json();
+      return {
+        items,
+        total:       parseInt(resp.headers.get('X-WP-Total') ?? '0', 10),
+        total_pages: parseInt(resp.headers.get('X-WP-TotalPages') ?? '0', 10),
+      };
     }
     case 'pages.get': {
       const { id } = req.params as { id: number };
