@@ -57,6 +57,26 @@ async function dispatch(req: BridgeRequest): Promise<void> {
   }
 }
 
+function shapePost(raw: any): unknown {
+  if (!raw || typeof raw !== 'object') return raw;
+  return {
+    id:                 raw.id,
+    slug:               raw.slug,
+    title:              raw.title?.rendered ?? '',
+    excerpt:            raw.excerpt?.rendered ?? '',
+    content:            raw.content?.rendered ?? '',
+    status:             raw.status,
+    protected:          raw.content?.protected ?? raw.excerpt?.protected ?? false,
+    date:               raw.date_gmt ? raw.date_gmt + 'Z' : raw.date,
+    modified:           raw.modified_gmt ? raw.modified_gmt + 'Z' : raw.modified,
+    author:             raw.author,
+    link:               raw.link,
+    featured_media_url: null, // populated server-side requires _embed; v1 leaves it null
+    categories:         raw.categories ?? [],
+    tags:               raw.tags ?? [],
+  };
+}
+
 async function routeToWp(req: BridgeRequest): Promise<unknown> {
   const af = window.wp!.apiFetch!;
   const headers = { 'X-WP-Nonce': nonce };
@@ -79,37 +99,58 @@ async function routeToWp(req: BridgeRequest): Promise<unknown> {
     case 'posts.list': {
       const q = (req.params ?? {}) as Record<string, unknown>;
       const resp = await af({ path: '/wp/v2/posts?' + new URLSearchParams(q as Record<string, string>).toString(), headers, parse: false }) as Response;
-      const items = await resp.json();
+      const rawItems = await resp.json();
       return {
-        items,
+        items:       Array.isArray(rawItems) ? rawItems.map(shapePost) : [],
         total:       parseInt(resp.headers.get('X-WP-Total') ?? '0', 10),
         total_pages: parseInt(resp.headers.get('X-WP-TotalPages') ?? '0', 10),
       };
     }
     case 'posts.get': {
       const { id } = req.params as { id: number };
-      return af({ path: `/wp/v2/posts/${id}`, headers });
+      return shapePost(await af({ path: `/wp/v2/posts/${id}`, headers }));
     }
     case 'pages.list': {
       const q = (req.params ?? {}) as Record<string, unknown>;
       const resp = await af({ path: '/wp/v2/pages?' + new URLSearchParams(q as Record<string, string>).toString(), headers, parse: false }) as Response;
-      const items = await resp.json();
+      const rawItems = await resp.json();
       return {
-        items,
+        items:       Array.isArray(rawItems) ? rawItems.map(shapePost) : [],
         total:       parseInt(resp.headers.get('X-WP-Total') ?? '0', 10),
         total_pages: parseInt(resp.headers.get('X-WP-TotalPages') ?? '0', 10),
       };
     }
     case 'pages.get': {
       const { id } = req.params as { id: number };
-      return af({ path: `/wp/v2/pages/${id}`, headers });
+      return shapePost(await af({ path: `/wp/v2/pages/${id}`, headers }));
     }
-    case 'user.current':
-      return af({ path: '/wp/v2/users/me', headers });
+    case 'user.current': {
+      // Anonymous visitors get null per the spec, not an exception.
+      try {
+        const raw = await af({ path: '/wp/v2/users/me?context=edit', headers }) as any;
+        return {
+          id:         raw.id,
+          name:       raw.name,
+          slug:       raw.slug,
+          email:      raw.email ?? '',
+          avatar_url: raw.avatar_urls?.['96'] ?? raw.avatar_urls?.['48'] ?? raw.avatar_urls?.['24'] ?? '',
+          roles:      raw.roles ?? [],
+        };
+      } catch (err: any) {
+        if (err?.data?.status === 401) return null;
+        throw err;
+      }
+    }
     case 'user.can': {
+      // Anonymous visitors get false per the spec, not an exception.
       const { cap } = req.params as { cap: string };
-      const r = await af({ path: '/dsgo/v1/can?cap=' + encodeURIComponent(cap), headers });
-      return (r as any).can;
+      try {
+        const r = await af({ path: '/dsgo/v1/can?cap=' + encodeURIComponent(cap), headers });
+        return (r as any).can;
+      } catch (err: any) {
+        if (err?.data?.status === 401) return false;
+        throw err;
+      }
     }
     case 'storage.app.get': {
       const { key } = req.params as { key: string };
