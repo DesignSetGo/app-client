@@ -1,0 +1,126 @@
+import {
+  type BridgeContext,
+  type BridgeError,
+  type BridgeMessage,
+  type BridgeRequest,
+  type BridgeResponse,
+} from './shared';
+
+declare global {
+  interface Window {
+    wp?: { apiFetch?: (opts: { path: string; method?: string; data?: unknown; headers?: Record<string, string> }) => Promise<unknown> };
+  }
+}
+
+const ctx: BridgeContext = (window as any).__dsgoBridgeContext;
+const manifest = (window as any).__dsgoManifest as { id: string; permissions: { read: string[] } };
+const permMap = (window as any).__dsgoPermissionMap as Record<string, string | null>;
+const nonce = (window as any).__dsgoNonce as string;
+
+const iframe = document.querySelector('iframe') as HTMLIFrameElement | null;
+const iframeWindow = iframe?.contentWindow ?? null;
+
+function reply(id: string, ok: boolean, payload: unknown): void {
+  const msg: BridgeResponse = ok
+    ? { type: 'dsgo:response', id, ok: true, data: payload }
+    : { type: 'dsgo:response', id, ok: false, error: payload as BridgeError };
+  iframeWindow?.postMessage(msg, '*');
+}
+
+async function dispatch(req: BridgeRequest): Promise<void> {
+  const required = permMap[req.method];
+  if (required === undefined) {
+    return reply(req.id, false, { code: 'unknown_method', message: req.method });
+  }
+  if (required !== null && !manifest.permissions.read.includes(required)) {
+    return reply(req.id, false, { code: 'permission_denied', message: `app does not have "${required}" permission` });
+  }
+
+  if (req.method === 'bridge.ping') {
+    return reply(req.id, true, { ok: true, bridge_version: 1, server_time: new Date().toISOString() });
+  }
+
+  if (!window.wp?.apiFetch) {
+    return reply(req.id, false, { code: 'internal_error', message: 'wp.apiFetch unavailable' });
+  }
+
+  try {
+    const result = await routeToWp(req);
+    reply(req.id, true, result);
+  } catch (err: any) {
+    const status = err?.data?.status as number | undefined;
+    const code = status === 401 ? 'not_authenticated'
+      : status === 403 ? 'permission_denied'
+      : status === 404 ? 'not_found'
+      : 'internal_error';
+    reply(req.id, false, { code, message: err?.message ?? String(err) });
+  }
+}
+
+async function routeToWp(req: BridgeRequest): Promise<unknown> {
+  const af = window.wp!.apiFetch!;
+  const headers = { 'X-WP-Nonce': nonce };
+
+  switch (req.method) {
+    case 'site.info':
+      return af({ path: '/', headers });
+    case 'posts.list': {
+      const q = (req.params ?? {}) as Record<string, unknown>;
+      return af({ path: '/wp/v2/posts?' + new URLSearchParams(q as Record<string, string>).toString(), headers });
+    }
+    case 'posts.get': {
+      const { id } = req.params as { id: number };
+      return af({ path: `/wp/v2/posts/${id}`, headers });
+    }
+    case 'pages.list': {
+      const q = (req.params ?? {}) as Record<string, unknown>;
+      return af({ path: '/wp/v2/pages?' + new URLSearchParams(q as Record<string, string>).toString(), headers });
+    }
+    case 'pages.get': {
+      const { id } = req.params as { id: number };
+      return af({ path: `/wp/v2/pages/${id}`, headers });
+    }
+    case 'user.current':
+      return af({ path: '/wp/v2/users/me', headers });
+    case 'user.can': {
+      const { cap } = req.params as { cap: string };
+      const r = await af({ path: '/dsgo/v1/can?cap=' + encodeURIComponent(cap), headers });
+      return (r as any).can;
+    }
+    case 'storage.app.get': {
+      const { key } = req.params as { key: string };
+      const r = await af({ path: `/dsgo/v1/apps/${manifest.id}/storage/app/${encodeURIComponent(key)}`, headers });
+      return (r as any).value;
+    }
+    case 'storage.app.set': {
+      const { key, value } = req.params as { key: string; value: unknown };
+      await af({ path: `/dsgo/v1/apps/${manifest.id}/storage/app/${encodeURIComponent(key)}`, method: 'PUT', data: { value }, headers });
+      return null;
+    }
+    case 'storage.user.get': {
+      const { key } = req.params as { key: string };
+      const r = await af({ path: `/dsgo/v1/apps/${manifest.id}/storage/user/${encodeURIComponent(key)}`, headers });
+      return (r as any).value;
+    }
+    case 'storage.user.set': {
+      const { key, value } = req.params as { key: string; value: unknown };
+      await af({ path: `/dsgo/v1/apps/${manifest.id}/storage/user/${encodeURIComponent(key)}`, method: 'PUT', data: { value }, headers });
+      return null;
+    }
+    default:
+      throw new Error('unknown method: ' + req.method);
+  }
+}
+
+window.addEventListener('message', (event: MessageEvent<unknown>) => {
+  if (event.source !== iframeWindow) return;
+  const msg = event.data as BridgeMessage | null;
+  if (!msg || typeof msg !== 'object') return;
+  if ((msg as BridgeMessage).type === 'dsgo:hello') {
+    iframeWindow?.postMessage({ type: 'dsgo:context', payload: ctx }, '*');
+    return;
+  }
+  if ((msg as BridgeMessage).type === 'dsgo:request') {
+    void dispatch(msg as BridgeRequest);
+  }
+});
