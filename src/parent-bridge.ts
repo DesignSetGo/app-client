@@ -28,6 +28,8 @@ interface EmbedConfig {
   manifest: { id: string; name?: string; permissions: { read: string[] } };
   permMap: Record<string, string | null>;
   nonce: string;
+  /** Per-(user, app) nonce for storage calls — see RestApi::permit_storage. */
+  appNonce?: string;
 }
 
 interface EmbedEntry extends EmbedConfig {
@@ -91,6 +93,7 @@ async function dispatch(entry: EmbedEntry, req: BridgeRequest): Promise<void> {
     manifest: entry.manifest,
     permMap: entry.permMap,
     nonce: entry.nonce,
+    ...(entry.appNonce ? { appNonce: entry.appNonce } : {}),
     apiFetch: window.wp.apiFetch,
   });
   target.postMessage(response, '*');

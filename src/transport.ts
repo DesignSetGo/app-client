@@ -32,6 +32,14 @@ export interface RequestHandlerDeps {
   manifest: { id: string; permissions: { read: string[] } };
   permMap: Record<string, string | null>;
   nonce: string;
+  /**
+   * Per-(user, app) nonce minted at bootstrap. Sent on storage calls in the
+   * `X-DSGo-App-Nonce` header so the server can confirm the call came from
+   * this app's bootstrap, not from another app forging a fetch. Optional for
+   * backward-compat with bootstrap chains that haven't been rebuilt; storage
+   * calls without it 403 at the server.
+   */
+  appNonce?: string;
   apiFetch: ApiFetch;
 }
 
@@ -105,14 +113,20 @@ export async function handleRequest(
   req: BridgeRequest,
   deps: RequestHandlerDeps,
 ): Promise<BridgeResponse> {
-  const { nonce, apiFetch, manifest } = deps;
+  const { nonce, apiFetch, manifest, appNonce } = deps;
 
   // 1–3. Fast-path checks (unknown method, permission, bridge.ping)
   const early = guardRequest(req, deps);
   if (early !== null) return early;
 
   // 4. Route to WP REST API
-  const headers = { 'X-WP-Nonce': nonce };
+  // Storage routes carry the per-(user, app) nonce so the server can confirm
+  // this call came from our app's bootstrap, not from another app forging a
+  // direct fetch. See RestApi::permit_storage.
+  const headers: Record<string, string> = { 'X-WP-Nonce': nonce };
+  if (req.method.startsWith('storage.') && appNonce) {
+    headers['X-DSGo-App-Nonce'] = appNonce;
+  }
 
   try {
     const result = await routeToWp(req, { apiFetch, headers, manifest });
