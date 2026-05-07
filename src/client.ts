@@ -218,6 +218,13 @@ export const dsgo = {
   },
   bridge: {
     ping: () => call<{ ok: true; bridge_version: number; server_time: string }>('bridge.ping'),
+    requestResize: (height: number) => {
+      if (!Number.isFinite(height)) return;
+      const clamped = Math.max(100, Math.min(2000, Math.round(height)));
+      if (typeof window !== 'undefined' && window.parent && window.parent !== window) {
+        window.parent.postMessage({ type: 'dsgo:resize', height: clamped }, '*');
+      }
+    },
   },
 } as const;
 

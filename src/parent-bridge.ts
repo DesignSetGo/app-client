@@ -48,6 +48,20 @@ window.addEventListener('message', (event: MessageEvent<unknown>) => {
     iframeWindow?.postMessage({ type: 'dsgo:context', payload: ctx }, '*');
     return;
   }
+  if ((msg as { type: string }).type === 'dsgo:resize') {
+    if (ctx.mode !== 'block' || !ctx.blockProps?.autoResize) return;
+    const raw = Number((msg as { type: string; height: unknown }).height);
+    if (!Number.isFinite(raw)) return;
+    const h = Math.max(100, Math.min(2000, Math.round(raw)));
+    if (iframe) iframe.style.height = h + 'px';
+    if (window.parent && window.parent !== window) {
+      window.parent.postMessage(
+        { type: 'dsgo:embed:resize', height: h, appId: ctx.appId },
+        '*',
+      );
+    }
+    return;
+  }
   if ((msg as BridgeMessage).type === 'dsgo:request') {
     void dispatch(msg as BridgeRequest);
   }

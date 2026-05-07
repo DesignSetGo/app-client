@@ -116,3 +116,54 @@ describe('bridge client side-effect gating', () => {
     Object.defineProperty(window, 'parent', { value: realParent, configurable: true, writable: true });
   });
 });
+
+describe('dsgo.bridge.requestResize', () => {
+  let postMessageSpy: ReturnType<typeof vi.fn>;
+  let realParent: Window;
+
+  beforeEach(() => {
+    postMessageSpy = vi.fn();
+    realParent = window.parent;
+    Object.defineProperty(window, 'parent', {
+      value: { postMessage: postMessageSpy },
+      configurable: true,
+      writable: true,
+    });
+    vi.resetModules();
+  });
+
+  afterEach(() => {
+    Object.defineProperty(window, 'parent', { value: realParent, configurable: true, writable: true });
+  });
+
+  it('posts dsgo:resize with clamped height to window.parent', async () => {
+    const { dsgo } = await import('./client');
+    dsgo.bridge.requestResize(720);
+    const resizeCall = postMessageSpy.mock.calls.find(c => c[0]?.type === 'dsgo:resize');
+    expect(resizeCall).toBeTruthy();
+    expect(resizeCall![0]).toEqual({ type: 'dsgo:resize', height: 720 });
+  });
+
+  it('skips postMessage when height is NaN', async () => {
+    const { dsgo } = await import('./client');
+    dsgo.bridge.requestResize(NaN);
+    const resizeCall = postMessageSpy.mock.calls.find(c => c[0]?.type === 'dsgo:resize');
+    expect(resizeCall).toBeUndefined();
+  });
+
+  it('clamps height below 100 up to 100', async () => {
+    const { dsgo } = await import('./client');
+    dsgo.bridge.requestResize(-50);
+    const resizeCall = postMessageSpy.mock.calls.find(c => c[0]?.type === 'dsgo:resize');
+    expect(resizeCall).toBeTruthy();
+    expect(resizeCall![0]).toEqual({ type: 'dsgo:resize', height: 100 });
+  });
+
+  it('clamps height above 2000 down to 2000', async () => {
+    const { dsgo } = await import('./client');
+    dsgo.bridge.requestResize(99999);
+    const resizeCall = postMessageSpy.mock.calls.find(c => c[0]?.type === 'dsgo:resize');
+    expect(resizeCall).toBeTruthy();
+    expect(resizeCall![0]).toEqual({ type: 'dsgo:resize', height: 2000 });
+  });
+});
