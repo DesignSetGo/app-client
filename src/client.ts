@@ -2,11 +2,15 @@ import {
   isBridgeError,
   newRequestId,
   REQUEST_TIMEOUT_MS,
+  METHOD_TIMEOUTS_MS,
   type BridgeContext,
   type BridgeError,
   type BridgeErrorCode,
   type BridgeMessage,
   type BridgeResponse,
+  type AiPromptParams,
+  type AiPromptResult,
+  type AbilityDescriptor,
 } from './shared';
 
 export class BridgeRequestError extends Error implements BridgeError {
@@ -124,10 +128,14 @@ async function call<T>(method: string, params?: unknown): Promise<T> {
       return;
     }
     const id = newRequestId();
+    const timeoutMs = (() => {
+      const fn = METHOD_TIMEOUTS_MS[method];
+      return fn && context !== null ? fn(context) : REQUEST_TIMEOUT_MS;
+    })();
     const timer = setTimeout(() => {
       pending.delete(id);
       reject(new BridgeRequestError({ code: 'internal_error', message: `request "${method}" timed out` }));
-    }, REQUEST_TIMEOUT_MS);
+    }, timeoutMs);
     pending.set(id, { resolve: resolve as (v: unknown) => void, reject, timer });
     // Inline mode: same-window transport. Iframe mode: post to parent frame.
     const target = isInline ? window : window.parent;
@@ -215,6 +223,14 @@ export const dsgo = {
       get: (key: string) => call<unknown>('storage.user.get', { key }),
       set: (key: string, value: unknown) => call<void>('storage.user.set', { key, value }),
     },
+  },
+  abilities: {
+    list:   () => call<AbilityDescriptor[]>('abilities.list'),
+    invoke: <T = unknown>(name: string, args?: Record<string, unknown>) =>
+      call<T>('abilities.invoke', { name, args }),
+  },
+  ai: {
+    prompt: (params: AiPromptParams) => call<AiPromptResult>('ai.prompt', params),
   },
   bridge: {
     ping: () => call<{ ok: true; bridge_version: number; server_time: string }>('bridge.ping'),

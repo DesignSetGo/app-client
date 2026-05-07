@@ -168,3 +168,54 @@ describe('dsgo.bridge.requestResize', () => {
     expect(resizeCall![0]).toEqual({ type: 'dsgo:resize', height: 2000 });
   });
 });
+
+describe('dsgo.ai.prompt — per-method timeout', () => {
+  let realParent: Window;
+
+  beforeEach(() => {
+    realParent = window.parent;
+    // Inline mode: window.parent === window
+    Object.defineProperty(window, 'parent', {
+      value: window,
+      configurable: true,
+      writable: true,
+    });
+    const tag = document.createElement('script');
+    tag.id = 'dsgo-context';
+    tag.type = 'application/json';
+    tag.textContent = JSON.stringify({
+      bridgeVersion: 1, mode: 'inline', appId: 'x', locale: 'en-US', theme: 'light',
+      blockProps: null, routeParams: {}, aiTimeoutSeconds: 90,
+    });
+    document.head.appendChild(tag);
+    vi.useFakeTimers();
+    vi.resetModules();
+  });
+
+  afterEach(() => {
+    document.getElementById('dsgo-context')?.remove();
+    vi.useRealTimers();
+    Object.defineProperty(window, 'parent', { value: realParent, configurable: true, writable: true });
+  });
+
+  it('does not time out at 30s for ai.prompt with aiTimeoutSeconds=90', async () => {
+    // The client must use the METHOD_TIMEOUTS_MS override (95_000ms) instead
+    // of the default REQUEST_TIMEOUT_MS (30_000ms).
+    const { dsgo } = await import('./client');
+    const promise = dsgo.ai.prompt({ messages: [{ role: 'user', content: 'hi' }] });
+    promise.catch(() => {});  // silence unhandled-rejection at the awaiter level
+
+    // Past 30s default — must not have timed out.
+    await vi.advanceTimersByTimeAsync(31_000);
+    let settled = false;
+    Promise.race([promise, Promise.resolve('still-pending')])
+      .then((v) => { if (v !== 'still-pending') settled = true; })
+      .catch(() => { settled = true; });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    // Advance past the per-method timeout (95s = 90s + 5s headroom). Must reject.
+    await vi.advanceTimersByTimeAsync(70_000);
+    await expect(promise).rejects.toThrow(/timed out/);
+  });
+});
