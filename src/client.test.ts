@@ -8,6 +8,7 @@ const sampleContext: BridgeContext = {
   locale: 'en-US',
   theme: 'light',
   blockProps: null,
+  routeParams: {},
 };
 
 function dispatchFromParent(data: unknown) {

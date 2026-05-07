@@ -23,7 +23,7 @@ describe('parent-bridge', () => {
     postSpy = vi.fn();
     Object.defineProperty(iframeWindow, 'postMessage', { value: postSpy, configurable: true });
 
-    window.__dsgoBridgeContext = { bridgeVersion: 1, appId: 'sample', mode: 'page', locale: 'en-US', theme: 'light', blockProps: null };
+    window.__dsgoBridgeContext = { bridgeVersion: 1, appId: 'sample', mode: 'page', locale: 'en-US', theme: 'light', blockProps: null, routeParams: {} };
     window.__dsgoNonce = 'nonce-xyz';
     window.__dsgoManifest = { id: 'sample', name: 'Sample', permissions: { read: ['posts'], write: [] } };
     window.__dsgoPermissionMap = { 'posts.list': 'posts', 'user.current': 'user', 'bridge.ping': null };
@@ -75,6 +75,7 @@ describe('parent-bridge resize forwarding', () => {
       locale: 'en-US',
       theme: 'light',
       blockProps: { autoResize: true },
+      routeParams: {},
       ...ctx,
     } as BridgeContext;
     window.__dsgoNonce = 'nonce-xyz';

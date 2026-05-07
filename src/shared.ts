@@ -26,6 +26,12 @@ export interface BridgeContext {
   locale: string;
   theme: 'light' | 'dark';
   blockProps: Record<string, unknown> | null;
+  /**
+   * URL `:param` captures for the current request. Empty `{}` for static
+   * routes; populated for inline-mode dynamic routes (e.g. `/customers/:id`
+   * matching `/customers/123` yields `{ id: '123' }`).
+   */
+  routeParams: Record<string, string>;
 }
 
 export type BridgeRequest = {
