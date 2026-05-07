@@ -9,6 +9,8 @@ export const BRIDGE_ERROR_CODES = [
   'rate_limited',
   'payload_too_large',
   'internal_error',
+  'ai_not_configured',
+  'not_implemented',
 ] as const;
 
 export type BridgeErrorCode = (typeof BRIDGE_ERROR_CODES)[number];
@@ -32,6 +34,12 @@ export interface BridgeContext {
    * matching `/customers/123` yields `{ id: '123' }`).
    */
   routeParams: Record<string, string>;
+  /**
+   * Set when manifest declares "ai" in permissions.read; the value is the
+   * manifest's ai.timeout_seconds. Used by the per-method client timeout
+   * map so dsgo.ai.prompt() isn't killed at the default 30s.
+   */
+  aiTimeoutSeconds?: number;
 }
 
 export type BridgeRequest = {
@@ -58,6 +66,50 @@ export type BridgeMessage = BridgeRequest | BridgeResponse | BridgeContextEvent 
 
 export const REQUEST_TIMEOUT_MS = 30_000;
 export const MAX_INFLIGHT_REQUESTS = 32;
+
+/**
+ * Per-method timeout overrides. Keys are bridge method names; values are
+ * functions that compute the timeout (ms) from context. Methods absent from
+ * this map fall back to REQUEST_TIMEOUT_MS.
+ */
+export const METHOD_TIMEOUTS_MS: Record<string, (ctx: BridgeContext) => number> = {
+  'ai.prompt': (ctx) => Math.min(120_000, (ctx.aiTimeoutSeconds ?? 60) * 1000) + 5_000,
+};
+
+// New types for the AI bridge surface ----------------------------------
+
+export type Role = 'user' | 'assistant' | 'system';
+
+export interface PromptMessage { role: Role; content: string }
+
+export interface AbilityDescriptor {
+  name: string;
+  label: string;
+  description: string;
+  category: string;
+  input_schema: Record<string, unknown> | null;
+  output_schema: Record<string, unknown> | null;
+  annotations: { readonly?: boolean; destructive?: boolean; idempotent?: boolean };
+}
+
+export interface AiPromptParams {
+  messages: PromptMessage[];
+  max_tokens?: number;
+  tools?: 'auto' | string[];
+}
+
+export interface AiToolCallRecord {
+  name: string;
+  args: Record<string, unknown>;
+  result: { ok: true; data: unknown } | { ok: false; error: string; code: string };
+  duration_ms: number;
+}
+
+export interface AiPromptResult {
+  content: string;
+  usage: { input_tokens: number; output_tokens: number };
+  tool_calls: AiToolCallRecord[];
+}
 
 export function isBridgeError(value: unknown): value is BridgeError {
   if (!value || typeof value !== 'object') return false;

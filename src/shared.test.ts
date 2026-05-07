@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isBridgeError, BRIDGE_ERROR_CODES, REQUEST_TIMEOUT_MS } from './shared';
+import { isBridgeError, BRIDGE_ERROR_CODES, REQUEST_TIMEOUT_MS, METHOD_TIMEOUTS_MS } from './shared';
 import type { BridgeContext } from './shared';
 
 describe('shared', () => {
@@ -36,5 +36,38 @@ describe('BridgeContext.routeParams', () => {
       blockProps: null, routeParams: { id: '123', slug: 'foo' },
     };
     expect(ctx.routeParams.id).toBe('123');
+  });
+});
+
+describe('BRIDGE_ERROR_CODES', () => {
+  it('includes ai_not_configured', () => {
+    expect((BRIDGE_ERROR_CODES as readonly string[])).toContain('ai_not_configured');
+  });
+  it('includes not_implemented', () => {
+    expect((BRIDGE_ERROR_CODES as readonly string[])).toContain('not_implemented');
+  });
+});
+
+describe('METHOD_TIMEOUTS_MS', () => {
+  it('extends ai.prompt timeout based on context', () => {
+    const ctx: BridgeContext = {
+      bridgeVersion: 1, appId: 'x', mode: 'page', locale: 'en-US', theme: 'light',
+      blockProps: null, routeParams: {}, aiTimeoutSeconds: 90,
+    };
+    expect(METHOD_TIMEOUTS_MS['ai.prompt']!(ctx)).toBe(95_000);
+  });
+  it('caps ai.prompt timeout at 125s even if context lies', () => {
+    const ctx: BridgeContext = {
+      bridgeVersion: 1, appId: 'x', mode: 'page', locale: 'en-US', theme: 'light',
+      blockProps: null, routeParams: {}, aiTimeoutSeconds: 9999,
+    };
+    expect(METHOD_TIMEOUTS_MS['ai.prompt']!(ctx)).toBe(125_000);
+  });
+  it('defaults to 65s for ai.prompt when context omits aiTimeoutSeconds', () => {
+    const ctx: BridgeContext = {
+      bridgeVersion: 1, appId: 'x', mode: 'page', locale: 'en-US', theme: 'light',
+      blockProps: null, routeParams: {},
+    };
+    expect(METHOD_TIMEOUTS_MS['ai.prompt']!(ctx)).toBe(65_000);
   });
 });
