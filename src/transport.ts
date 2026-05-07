@@ -9,6 +9,17 @@
 import type { BridgeRequest, BridgeResponse, BridgeErrorCode } from './shared';
 import { BRIDGE_ERROR_CODES } from './shared';
 
+interface WpRestErrorBody {
+  code?: unknown;
+  message?: unknown;
+  data?: {
+    status?: unknown;
+    details?: {
+      status?: { code?: string };
+    };
+  };
+}
+
 export type ApiFetch = (opts: {
   path: string;
   method?: string;
@@ -106,13 +117,42 @@ export async function handleRequest(
   try {
     const result = await routeToWp(req, { apiFetch, headers, manifest });
     return makeOk(req.id, result);
-  } catch (err: any) {
-    // Prefer the REST body's `code` when it matches a known bridge error
-    // (e.g. `payload_too_large` from Storage::*_set when over quota) — that
-    // way the app gets the specific reason, not a generic `internal_error`.
-    // Fall back to HTTP-status mapping for codes we don't recognize.
-    const restCode = typeof err?.code === 'string' ? err.code : undefined;
-    const status = err?.data?.status as number | undefined;
+  } catch (err: unknown) {
+    // wp.apiFetch has two failure shapes:
+    //   1. Default (`parse: true`): rejects with the parsed JSON error body
+    //      `{ code, message, data: { status } }`.
+    //   2. `parse: false` (used by posts.list/pages.list to read X-WP-Total
+    //      headers): rejects with the raw `Response` on non-2xx.
+    // Map both to a BridgeError so callers get a consistent code + message.
+    let restCode: string | undefined;
+    let restMsg: string | undefined;
+    let status: number | undefined;
+    let body: WpRestErrorBody | undefined;
+    if (typeof Response !== 'undefined' && err instanceof Response) {
+      status = err.status;
+      try {
+        body = await err.clone().json() as WpRestErrorBody;
+      } catch {
+        // body wasn't JSON — fall through to status-based mapping
+      }
+    } else {
+      body = err as WpRestErrorBody;
+      if (typeof body?.data?.status === 'number') status = body.data.status;
+    }
+    if (body) {
+      if (typeof body.code === 'string') restCode = body.code;
+      if (typeof body.message === 'string') restMsg = body.message;
+    }
+    // WP normalizes `posts.list` / `pages.list` capability violations on the
+    // `status` param (subscriber asking for `status=draft`, etc.) to a 400
+    // `rest_invalid_param`. The actual signal is buried in
+    // `data.details.status.code === 'rest_forbidden_status'`. Bridge spec
+    // requires `permission_denied` for that case — map it here.
+    const detailsStatusCode = body?.data?.details?.status?.code;
+    if (restCode === 'rest_invalid_param' && detailsStatusCode === 'rest_forbidden_status') {
+      restCode = 'permission_denied';
+      if (!restMsg) restMsg = 'Status is forbidden.';
+    }
     const isKnownBridgeCode = restCode !== undefined &&
       (BRIDGE_ERROR_CODES as readonly string[]).includes(restCode);
     const code: BridgeErrorCode = isKnownBridgeCode
@@ -123,7 +163,7 @@ export async function handleRequest(
       : status === 413 ? 'payload_too_large'
       : status === 429 ? 'rate_limited'
       : 'internal_error';
-    return makeErr(req.id, code, err?.message ?? String(err));
+    return makeErr(req.id, code, restMsg ?? (status !== undefined ? `HTTP ${status}` : 'request failed'));
   }
 }
 
@@ -140,18 +180,11 @@ async function routeToWp(
 
   switch (req.method) {
     case 'site.info': {
-      const raw = await af({ path: '/', headers }) as Record<string, unknown>;
-      return {
-        title:       raw.name,
-        description: raw.description,
-        url:         raw.url,
-        admin_email: raw.email,
-        language:    raw.language,
-        timezone:    raw.timezone_string,
-        gmt_offset:  raw.gmt_offset,
-        date_format: raw.date_format,
-        time_format: raw.time_format,
-      };
+      // The built-in WP REST root index (`/`) doesn't expose admin_email,
+      // language, or the date/time formats — call our /dsgo/v1/site-info
+      // helper which assembles the spec-required shape server-side. The
+      // body is already in bridge shape; pass through unchanged.
+      return await af({ path: '/dsgo/v1/site-info', headers });
     }
     case 'posts.list': {
       const q = (req.params ?? {}) as Record<string, unknown>;

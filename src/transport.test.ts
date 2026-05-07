@@ -92,26 +92,61 @@ describe('handleRequest', () => {
     });
   });
 
-  it('dispatches site.info to apiFetch on success', async () => {
+  it('dispatches site.info to /dsgo/v1/site-info and returns body unchanged', async () => {
+    // Server-side endpoint already shapes the response into bridge form;
+    // transport just forwards.
     const apiFetch = vi.fn().mockResolvedValue({
-      name: 'My Site',
+      title: 'My Site',
       description: 'A site',
       url: 'https://example.com',
-      email: 'admin@example.com',
+      admin_email: 'admin@example.com',
       language: 'en-US',
-      timezone_string: 'UTC',
+      timezone: 'UTC',
       gmt_offset: 0,
       date_format: 'Y-m-d',
       time_format: 'H:i',
     });
     const deps = makeDeps({ apiFetch });
     const res = await handleRequest(req('site.info'), deps);
-    expect(apiFetch).toHaveBeenCalled();
+    expect(apiFetch).toHaveBeenCalledWith(expect.objectContaining({ path: '/dsgo/v1/site-info' }));
     expect(res).toMatchObject({
       type: 'dsgo:response',
       id: 'r1',
       ok: true,
-      data: expect.objectContaining({ title: 'My Site' }),
+      data: expect.objectContaining({ title: 'My Site', language: 'en-US', admin_email: 'admin@example.com' }),
+    });
+  });
+
+  it('maps WP rest_invalid_param/rest_forbidden_status (subscriber asking for drafts) to permission_denied', async () => {
+    const apiFetch = vi.fn().mockRejectedValue(
+      Object.assign(new Error('Invalid parameter(s): status'), {
+        code: 'rest_invalid_param',
+        message: 'Invalid parameter(s): status',
+        data: {
+          status: 400,
+          details: { status: { code: 'rest_forbidden_status' } },
+        },
+      }),
+    );
+    const deps = makeDeps({ apiFetch });
+    const res = await handleRequest(req('posts.list', { status: 'draft' }), deps);
+    expect(res).toMatchObject({
+      ok: false,
+      error: expect.objectContaining({ code: 'permission_denied' }),
+    });
+  });
+
+  it('handles raw Response thrown by wp.apiFetch parse:false path', async () => {
+    const responseLike = new Response(
+      JSON.stringify({ code: 'rest_invalid_param', message: 'Bad', data: { status: 400, details: { status: { code: 'rest_forbidden_status' } } } }),
+      { status: 400, headers: { 'Content-Type': 'application/json' } },
+    );
+    const apiFetch = vi.fn().mockRejectedValue(responseLike);
+    const deps = makeDeps({ apiFetch });
+    const res = await handleRequest(req('posts.list', { status: 'private' }), deps);
+    expect(res).toMatchObject({
+      ok: false,
+      error: expect.objectContaining({ code: 'permission_denied' }),
     });
   });
 });
