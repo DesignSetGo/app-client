@@ -24,6 +24,28 @@ export default [
     },
     plugins: [typescript({ tsconfig: './tsconfig.json', outDir: '../assets', declaration: false, declarationMap: false })],
   },
+  // IIFE: bridge-client-inline.js auto-injected into inline-mode apps
+  {
+    input: 'src/client.ts',
+    output: {
+      file: '../assets/bridge-client-inline.js',
+      format: 'iife',
+      name: 'DSGoAppClient',
+      sourcemap: true,
+    },
+    plugins: [typescript({ tsconfig: './tsconfig.json', outDir: '../assets', declaration: false, declarationMap: false })],
+  },
+  // IIFE: parent-bridge-inline.js loaded for inline-mode apps
+  {
+    input: 'src/parent-bridge-inline.entry.ts',
+    output: {
+      file: '../assets/parent-bridge-inline.js',
+      format: 'iife',
+      name: 'DSGoParentBridgeInline',
+      sourcemap: true,
+    },
+    plugins: [typescript({ tsconfig: './tsconfig.json', outDir: '../assets', declaration: false, declarationMap: false })],
+  },
   // ESM npm output
   {
     input: 'src/client.ts',
