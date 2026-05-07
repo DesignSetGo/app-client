@@ -15,7 +15,7 @@
  * and dsgo:request (proxies posts.list/etc. via wp.apiFetch + handleRequest).
  */
 
-import { registerAbility } from '@wordpress/abilities';
+import { registerAbility, registerAbilityCategory, getAbilityCategory } from '@wordpress/abilities';
 import {
   type BridgeContext,
   type BridgeRequest,
@@ -327,11 +327,22 @@ async function handleIframeRequest(owner: IframeEntry, req: BridgeRequest): Prom
   resetIdle(owner);
 }
 
+const DSGO_CATEGORY = 'dsgo-app';
+
+function ensureCategory(): void {
+  if (getAbilityCategory(DSGO_CATEGORY)) return;
+  registerAbilityCategory(DSGO_CATEGORY, {
+    label: 'DesignSetGo Apps',
+    description: 'Abilities published by DesignSetGo apps installed on this site.',
+  });
+}
+
 function init(): void {
   const config = readConfig();
   if (!config || config.apps.length === 0) return;
 
   setupGlobalMessageListener();
+  ensureCategory();
 
   for (const app of config.apps) {
     for (const ability of app.abilities) {

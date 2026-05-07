@@ -30,3 +30,22 @@ export function unregisterAbility(_name: string): void {
 export function executeAbility(_name: string, _input?: unknown): Promise<unknown> {
   return Promise.resolve(null);
 }
+
+export interface AbilityCategoryArgs {
+  label: string;
+  description?: string;
+}
+
+export interface AbilityCategory extends AbilityCategoryArgs {
+  name: string;
+}
+
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+export function registerAbilityCategory(_slug: string, _args: AbilityCategoryArgs): void {
+  // runtime no-op
+}
+
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+export function getAbilityCategory(_name: string): AbilityCategory | undefined {
+  return undefined;
+}

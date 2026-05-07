@@ -4,9 +4,11 @@ vi.mock('@wordpress/abilities', () => ({
   registerAbility: vi.fn(),
   unregisterAbility: vi.fn(),
   executeAbility: vi.fn(),
+  registerAbilityCategory: vi.fn(),
+  getAbilityCategory: vi.fn().mockReturnValue(undefined),
 }));
 
-import { registerAbility } from '@wordpress/abilities';
+import { registerAbility, registerAbilityCategory, getAbilityCategory } from '@wordpress/abilities';
 
 const baseConfig = {
   apps: [
@@ -49,6 +51,9 @@ describe('parent-bridge-publish', () => {
     clearBody();
     document.head.querySelectorAll('script[id^="dsgo-"]').forEach((n) => n.remove());
     (registerAbility as any).mockClear();
+    (registerAbilityCategory as any).mockClear();
+    (getAbilityCategory as any).mockReset();
+    (getAbilityCategory as any).mockReturnValue(undefined);
     (window as any).wp = { apiFetch: vi.fn() };
   });
 
@@ -105,5 +110,25 @@ describe('parent-bridge-publish', () => {
     injectConfigIsland({ ...baseConfig, apps: [] });
     await import('./parent-bridge-publish');
     expect(registerAbility).not.toHaveBeenCalled();
+  });
+
+  it('registers the dsgo-app category before any ability', async () => {
+    injectConfigIsland();
+    await import('./parent-bridge-publish');
+    expect(registerAbilityCategory).toHaveBeenCalledWith(
+      'dsgo-app',
+      expect.objectContaining({ label: expect.any(String) }),
+    );
+    const catCallOrder = (registerAbilityCategory as any).mock.invocationCallOrder[0];
+    const abilityCallOrder = (registerAbility as any).mock.invocationCallOrder[0];
+    expect(catCallOrder).toBeLessThan(abilityCallOrder);
+  });
+
+  it('does not re-register the category when already present', async () => {
+    (getAbilityCategory as any).mockReturnValue({ slug: 'dsgo-app', label: 'DesignSetGo Apps' });
+    injectConfigIsland();
+    await import('./parent-bridge-publish');
+    expect(registerAbilityCategory).not.toHaveBeenCalled();
+    expect(registerAbility).toHaveBeenCalled();
   });
 });
