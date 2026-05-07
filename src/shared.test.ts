@@ -71,3 +71,18 @@ describe('METHOD_TIMEOUTS_MS', () => {
     expect(METHOD_TIMEOUTS_MS['ai.prompt']!(ctx)).toBe(65_000);
   });
 });
+
+describe('publish-side error codes', () => {
+  it('includes ability_handler_error', () => {
+    expect((BRIDGE_ERROR_CODES as readonly string[])).toContain('ability_handler_error');
+  });
+  it('includes app_load_failed', () => {
+    expect((BRIDGE_ERROR_CODES as readonly string[])).toContain('app_load_failed');
+  });
+  it('includes ability_not_implemented', () => {
+    expect((BRIDGE_ERROR_CODES as readonly string[])).toContain('ability_not_implemented');
+  });
+  it('includes ability_timeout', () => {
+    expect((BRIDGE_ERROR_CODES as readonly string[])).toContain('ability_timeout');
+  });
+});

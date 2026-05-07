@@ -11,6 +11,10 @@ export const BRIDGE_ERROR_CODES = [
   'internal_error',
   'ai_not_configured',
   'not_implemented',
+  'ability_handler_error',
+  'app_load_failed',
+  'ability_not_implemented',
+  'ability_timeout',
 ] as const;
 
 export type BridgeErrorCode = (typeof BRIDGE_ERROR_CODES)[number];
@@ -121,4 +125,38 @@ export function isBridgeError(value: unknown): value is BridgeError {
 
 export function newRequestId(): string {
   return 'req_' + Math.random().toString(36).slice(2, 11);
+}
+
+// Apps-as-abilities (publish side) types ------------------------------
+
+export type AbilityHandler<I = unknown, O = unknown> = (input: I) => Promise<O> | O;
+
+export interface AbilitiesReady {
+  type: 'dsgo:abilities:ready';
+  app_id: string;
+  implementations: string[];
+}
+
+export interface PublishedAbilityDescriptor {
+  name: string;
+  label: string;
+  description: string;
+  category: string;
+  input_schema?: Record<string, unknown>;
+  output_schema?: Record<string, unknown>;
+  annotations: { readonly?: boolean; destructive?: boolean; idempotent?: boolean };
+  timeout_seconds: number;
+}
+
+export interface PublisherAppConfig {
+  id: string;
+  bundle_url: string;
+  permissions: { read: string[]; write: string[] };
+  abilities: PublishedAbilityDescriptor[];
+}
+
+export interface PublisherConfig {
+  apps: PublisherAppConfig[];
+  rest_root: string;
+  rest_nonce: string;
 }
