@@ -46,6 +46,17 @@ export default [
     },
     plugins: [typescript({ tsconfig: './tsconfig.json', outDir: '../assets', declaration: false, declarationMap: false })],
   },
+  // ES module: parent-bridge-publish.js for wp-admin (imports @wordpress/abilities)
+  {
+    input: 'src/parent-bridge-publish.ts',
+    output: {
+      file: '../assets/parent-bridge-publish.js',
+      format: 'es',
+      sourcemap: true,
+    },
+    external: ['@wordpress/abilities'],
+    plugins: [typescript({ tsconfig: './tsconfig.json', outDir: '../assets', declaration: false, declarationMap: false })],
+  },
   // ESM npm output
   {
     input: 'src/client.ts',
