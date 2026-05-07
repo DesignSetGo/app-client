@@ -9,6 +9,9 @@ const sampleContext: BridgeContext = {
   theme: 'light',
   blockProps: null,
   routeParams: {},
+  path: '/',
+  search: '',
+  hash: '', mountPrefix: null,
 };
 
 function dispatchFromParent(data: unknown) {
@@ -178,7 +181,7 @@ describe('dsgo.abilities.implement', () => {
     tag.type = 'application/json';
     tag.textContent = JSON.stringify({
       bridgeVersion: 1, mode: 'inline', appId: 'sample',
-      locale: 'en-US', theme: 'light', blockProps: null, routeParams: {},
+      locale: 'en-US', theme: 'light', blockProps: null, routeParams: {}, path: '/', search: '', hash: '', mountPrefix: null,
     });
     document.head.appendChild(tag);
   });
@@ -287,7 +290,7 @@ describe('dsgo.ai.prompt — per-method timeout', () => {
     tag.type = 'application/json';
     tag.textContent = JSON.stringify({
       bridgeVersion: 1, mode: 'inline', appId: 'x', locale: 'en-US', theme: 'light',
-      blockProps: null, routeParams: {}, aiTimeoutSeconds: 90,
+      blockProps: null, routeParams: {}, path: '/', search: '', hash: '', mountPrefix: null, aiTimeoutSeconds: 90,
     });
     document.head.appendChild(tag);
     vi.useFakeTimers();

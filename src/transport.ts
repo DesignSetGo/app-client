@@ -297,6 +297,15 @@ async function routeToWp(
         headers,
       });
     }
+    case 'email.send': {
+      const params = (req.params ?? {}) as Record<string, unknown>;
+      return await af({
+        path: `/dsgo/v1/apps/${manifest.id}/email/send`,
+        method: 'POST',
+        data: params,
+        headers,
+      });
+    }
     default:
       throw new Error('unknown method: ' + req.method);
   }

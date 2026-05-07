@@ -34,7 +34,7 @@ function mountEmbed(id: string, cfg: EmbedConfig): { iframe: HTMLIFrameElement; 
 
 function defaultConfig(overrides: Partial<EmbedConfig> = {}): EmbedConfig {
   return {
-    context: { bridgeVersion: 1, appId: 'sample', mode: 'page', locale: 'en-US', theme: 'light', blockProps: null },
+    context: { bridgeVersion: 1, appId: 'sample', mode: 'page', locale: 'en-US', theme: 'light', blockProps: null, routeParams: {}, path: '/', search: '', hash: '', mountPrefix: null },
     manifest: { id: 'sample', name: 'Sample', permissions: { read: ['posts'], write: [] } },
     permMap: { 'posts.list': 'posts', 'user.current': 'user', 'bridge.ping': null },
     nonce: 'nonce-xyz',
@@ -60,11 +60,11 @@ describe('parent-bridge', () => {
 
   it('routes by event.source so two embeds get their own context', async () => {
     const a = mountEmbed('1', defaultConfig({
-      context: { bridgeVersion: 1, appId: 'app-a', mode: 'block', locale: 'en-US', theme: 'light', blockProps: null },
+      context: { bridgeVersion: 1, appId: 'app-a', mode: 'block', locale: 'en-US', theme: 'light', blockProps: null, routeParams: {}, path: '/', search: '', hash: '', mountPrefix: null },
       manifest: { id: 'app-a', name: 'A', permissions: { read: ['posts'], write: [] } },
     }));
     const b = mountEmbed('2', defaultConfig({
-      context: { bridgeVersion: 1, appId: 'app-b', mode: 'block', locale: 'en-US', theme: 'light', blockProps: null },
+      context: { bridgeVersion: 1, appId: 'app-b', mode: 'block', locale: 'en-US', theme: 'light', blockProps: null, routeParams: {}, path: '/', search: '', hash: '', mountPrefix: null },
       manifest: { id: 'app-b', name: 'B', permissions: { read: ['pages'], write: [] } },
     }));
     await import('./parent-bridge');
@@ -124,7 +124,7 @@ describe('parent-bridge resize forwarding', () => {
 
   it('resizes the iframe when mode=block and autoResize=true', async () => {
     const { iframe, iframeWindow } = mountEmbed('1', defaultConfig({
-      context: { bridgeVersion: 1, appId: 'sample', mode: 'block', locale: 'en-US', theme: 'light', blockProps: { autoResize: true } },
+      context: { bridgeVersion: 1, appId: 'sample', mode: 'block', locale: 'en-US', theme: 'light', blockProps: { autoResize: true }, routeParams: {}, path: '/', search: '', hash: '', mountPrefix: null },
     }));
     await import('./parent-bridge');
     window.dispatchEvent(new MessageEvent('message', {
@@ -136,7 +136,7 @@ describe('parent-bridge resize forwarding', () => {
 
   it('ignores dsgo:resize when mode=page', async () => {
     const { iframe, iframeWindow } = mountEmbed('1', defaultConfig({
-      context: { bridgeVersion: 1, appId: 'sample', mode: 'page', locale: 'en-US', theme: 'light', blockProps: null },
+      context: { bridgeVersion: 1, appId: 'sample', mode: 'page', locale: 'en-US', theme: 'light', blockProps: null, routeParams: {}, path: '/', search: '', hash: '', mountPrefix: null },
     }));
     await import('./parent-bridge');
     window.dispatchEvent(new MessageEvent('message', {
@@ -148,7 +148,7 @@ describe('parent-bridge resize forwarding', () => {
 
   it('ignores dsgo:resize when autoResize=false', async () => {
     const { iframe, iframeWindow } = mountEmbed('1', defaultConfig({
-      context: { bridgeVersion: 1, appId: 'sample', mode: 'block', locale: 'en-US', theme: 'light', blockProps: { autoResize: false } },
+      context: { bridgeVersion: 1, appId: 'sample', mode: 'block', locale: 'en-US', theme: 'light', blockProps: { autoResize: false }, routeParams: {}, path: '/', search: '', hash: '', mountPrefix: null },
     }));
     await import('./parent-bridge');
     window.dispatchEvent(new MessageEvent('message', {

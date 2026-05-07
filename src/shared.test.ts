@@ -25,7 +25,7 @@ describe('BridgeContext.routeParams', () => {
   it('accepts an empty routeParams object', () => {
     const ctx: BridgeContext = {
       bridgeVersion: 1, appId: 'x', mode: 'page', locale: 'en-US', theme: 'light',
-      blockProps: null, routeParams: {},
+      blockProps: null, routeParams: {}, path: '/', search: '', hash: '', mountPrefix: null,
     };
     expect(ctx.routeParams).toEqual({});
   });
@@ -33,7 +33,7 @@ describe('BridgeContext.routeParams', () => {
   it('accepts populated routeParams', () => {
     const ctx: BridgeContext = {
       bridgeVersion: 1, appId: 'x', mode: 'page', locale: 'en-US', theme: 'light',
-      blockProps: null, routeParams: { id: '123', slug: 'foo' },
+      blockProps: null, routeParams: { id: '123', slug: 'foo' }, path: '/customers/123', search: '', hash: '', mountPrefix: null,
     };
     expect(ctx.routeParams.id).toBe('123');
   });
@@ -52,21 +52,21 @@ describe('METHOD_TIMEOUTS_MS', () => {
   it('extends ai.prompt timeout based on context', () => {
     const ctx: BridgeContext = {
       bridgeVersion: 1, appId: 'x', mode: 'page', locale: 'en-US', theme: 'light',
-      blockProps: null, routeParams: {}, aiTimeoutSeconds: 90,
+      blockProps: null, routeParams: {}, path: '/', search: '', hash: '', mountPrefix: null, aiTimeoutSeconds: 90,
     };
     expect(METHOD_TIMEOUTS_MS['ai.prompt']!(ctx)).toBe(95_000);
   });
   it('caps ai.prompt timeout at 125s even if context lies', () => {
     const ctx: BridgeContext = {
       bridgeVersion: 1, appId: 'x', mode: 'page', locale: 'en-US', theme: 'light',
-      blockProps: null, routeParams: {}, aiTimeoutSeconds: 9999,
+      blockProps: null, routeParams: {}, path: '/', search: '', hash: '', mountPrefix: null, aiTimeoutSeconds: 9999,
     };
     expect(METHOD_TIMEOUTS_MS['ai.prompt']!(ctx)).toBe(125_000);
   });
   it('defaults to 65s for ai.prompt when context omits aiTimeoutSeconds', () => {
     const ctx: BridgeContext = {
       bridgeVersion: 1, appId: 'x', mode: 'page', locale: 'en-US', theme: 'light',
-      blockProps: null, routeParams: {},
+      blockProps: null, routeParams: {}, path: '/', search: '', hash: '', mountPrefix: null,
     };
     expect(METHOD_TIMEOUTS_MS['ai.prompt']!(ctx)).toBe(65_000);
   });

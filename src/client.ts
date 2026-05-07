@@ -4,7 +4,6 @@ import {
   REQUEST_TIMEOUT_MS,
   METHOD_TIMEOUTS_MS,
   type BridgeContext,
-  type BridgeError,
   type BridgeErrorCode,
   type BridgeMessage,
   type BridgeRequest,
@@ -14,17 +13,18 @@ import {
   type AbilityDescriptor,
   type AbilityHandler,
 } from './shared';
+import { BridgeRequestError } from './client-error';
+import {
+  applyExternalLocation,
+  attachInlinePopstateListener,
+  navigate as routerNavigate,
+  setLocationFromContext,
+  subscribe as routerSubscribe,
+  type Location as RouterLocation,
+  type NavigateOptions,
+} from './router';
 
-export class BridgeRequestError extends Error implements BridgeError {
-  public readonly code: BridgeErrorCode;
-  public readonly details?: unknown;
-  constructor(error: BridgeError) {
-    super(`${error.code}: ${error.message}`);
-    this.code = error.code;
-    this.details = error.details;
-    this.name = 'BridgeRequestError';
-  }
-}
+export { BridgeRequestError };
 
 declare global {
   interface Window {
@@ -112,6 +112,8 @@ if (isInline) {
   // Messages are exchanged with the same window (postMessage target = window).
   // event.source is window in real browsers and null in jsdom.
   context = inlineContext;
+  setLocationFromContext(context!);
+  attachInlinePopstateListener();
   resolveReady();
 
   window.addEventListener('message', (event: MessageEvent<unknown>) => {
@@ -157,6 +159,7 @@ if (isInline) {
 
     if (type === 'dsgo:context') {
       context = (msg as { type: 'dsgo:context'; payload: BridgeContext }).payload;
+      setLocationFromContext(context);
       resolveReady();
       return;
     }
@@ -167,8 +170,14 @@ if (isInline) {
       const req = msg as BridgeRequest;
       if (typeof req.method === 'string' && req.method.startsWith('ability:')) {
         void dispatchAbility(req.method, req.id, req.params, window.parent);
+        return;
       }
-      return;
+      if (req.method === 'router:popstate') {
+        const params = (req.params ?? {}) as Partial<RouterLocation>;
+        applyExternalLocation(params);
+        window.parent.postMessage({ type: 'dsgo:response', id: req.id, ok: true, data: null }, '*');
+        return;
+      }
     }
 
     if (type !== 'dsgo:response') return;
@@ -259,6 +268,16 @@ export interface SiteInfo {
   time_format: string;
 }
 
+export interface EmailSendParams {
+  to: 'admin' | 'current_user';
+  subject: string;
+  body: string;
+  isHtml?: boolean;
+  replyTo?: string;
+}
+
+export interface EmailSendResult { sent: true }
+
 export interface CurrentUser {
   id: number;
   name: string;
@@ -307,6 +326,19 @@ export const dsgo = {
   },
   ai: {
     prompt: (params: AiPromptParams) => call<AiPromptResult>('ai.prompt', params),
+  },
+  email: {
+    send: (params: EmailSendParams) => call<EmailSendResult>('email.send', params),
+  },
+  router: {
+    navigate: (path: string, opts?: NavigateOptions) =>
+      routerNavigate(path, opts ?? {}, {
+        context,
+        forwardToParent: async (params) => {
+          await call<null>('router.navigate', params);
+        },
+      }),
+    subscribe: (handler: (loc: RouterLocation) => void) => routerSubscribe(handler),
   },
   bridge: {
     ping: () => call<{ ok: true; bridge_version: number; server_time: string }>('bridge.ping'),

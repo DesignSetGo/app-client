@@ -227,6 +227,10 @@ function makeContextFor(appConfig: PublisherAppConfig): BridgeContext {
     theme: 'light',
     blockProps: null,
     routeParams: {},
+    path: '/',
+    search: '',
+    hash: '',
+    mountPrefix: null,
   };
 }
 

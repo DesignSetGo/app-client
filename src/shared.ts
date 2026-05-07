@@ -39,6 +39,22 @@ export interface BridgeContext {
    */
   routeParams: Record<string, string>;
   /**
+   * Path within the app's mount. Always starts with `/`. For prefixed mounts,
+   * excludes `/{prefix}/{appId}`. For block-embedded apps, always `/`.
+   */
+  path: string;
+  /** Query string with leading `?`, or `""` when none. */
+  search: string;
+  /** Fragment with leading `#`, or `""` when none. */
+  hash: string;
+  /**
+   * The site-relative prefix the app mounts under, used for client-side
+   * navigation validation. `""` for a root-mounted app; `/apps/{id}` (no
+   * trailing slash) for a prefixed mount. `null` when the bridge runs in
+   * a context where navigation is internal-only (block embed, admin).
+   */
+  mountPrefix: string | null;
+  /**
    * Set when manifest declares "ai" in permissions.read; the value is the
    * manifest's ai.timeout_seconds. Used by the per-method client timeout
    * map so dsgo.ai.prompt() isn't killed at the default 30s.
