@@ -3,36 +3,54 @@ import type { BridgeContext } from './shared';
 
 declare global {
   interface Window {
-    __dsgoBridgeContext: BridgeContext;
-    __dsgoNonce: string;
-    __dsgoManifest: { id: string; name: string; permissions: { read: string[]; write: string[] } };
-    __dsgoPermissionMap: Record<string, string | null>;
     wp: { apiFetch: (opts: unknown) => Promise<unknown> };
   }
 }
 
+interface EmbedConfig {
+  context: BridgeContext;
+  manifest: { id: string; name?: string; permissions: { read: string[]; write: string[] } };
+  permMap: Record<string, string | null>;
+  nonce: string;
+}
+
+function mountEmbed(id: string, cfg: EmbedConfig): { iframe: HTMLIFrameElement; iframeWindow: Window; postSpy: ReturnType<typeof vi.fn> } {
+  const wrapper = document.createElement('div');
+  const iframe = document.createElement('iframe');
+  iframe.dataset.dsgoEmbedId = id;
+  iframe.dataset.dsgoAppId = cfg.manifest.id;
+  const cfgEl = document.createElement('script');
+  cfgEl.type = 'application/json';
+  cfgEl.dataset.dsgoEmbedConfig = id;
+  cfgEl.textContent = JSON.stringify(cfg);
+  wrapper.appendChild(iframe);
+  wrapper.appendChild(cfgEl);
+  document.body.appendChild(wrapper);
+  const iframeWindow = iframe.contentWindow!;
+  const postSpy = vi.fn();
+  Object.defineProperty(iframeWindow, 'postMessage', { value: postSpy, configurable: true });
+  return { iframe, iframeWindow, postSpy };
+}
+
+function defaultConfig(overrides: Partial<EmbedConfig> = {}): EmbedConfig {
+  return {
+    context: { bridgeVersion: 1, appId: 'sample', mode: 'page', locale: 'en-US', theme: 'light', blockProps: null },
+    manifest: { id: 'sample', name: 'Sample', permissions: { read: ['posts'], write: [] } },
+    permMap: { 'posts.list': 'posts', 'user.current': 'user', 'bridge.ping': null },
+    nonce: 'nonce-xyz',
+    ...overrides,
+  };
+}
+
 describe('parent-bridge', () => {
-  let iframe: HTMLIFrameElement;
-  let iframeWindow: Window;
-  let postSpy: ReturnType<typeof vi.fn>;
-
   beforeEach(() => {
-    document.body.innerHTML = '<iframe id="dsgo"></iframe>';
-    iframe = document.getElementById('dsgo') as HTMLIFrameElement;
-    iframeWindow = iframe.contentWindow!;
-    postSpy = vi.fn();
-    Object.defineProperty(iframeWindow, 'postMessage', { value: postSpy, configurable: true });
-
-    window.__dsgoBridgeContext = { bridgeVersion: 1, appId: 'sample', mode: 'page', locale: 'en-US', theme: 'light', blockProps: null, routeParams: {} };
-    window.__dsgoNonce = 'nonce-xyz';
-    window.__dsgoManifest = { id: 'sample', name: 'Sample', permissions: { read: ['posts'], write: [] } };
-    window.__dsgoPermissionMap = { 'posts.list': 'posts', 'user.current': 'user', 'bridge.ping': null };
+    document.body.replaceChildren();
     window.wp = { apiFetch: vi.fn().mockResolvedValue([]) };
-
     vi.resetModules();
   });
 
-  it('responds to dsgo:hello with context', async () => {
+  it('responds to dsgo:hello with the embed-specific context', async () => {
+    const { iframeWindow, postSpy } = mountEmbed('1', defaultConfig());
     await import('./parent-bridge');
     window.dispatchEvent(new MessageEvent('message', { data: { type: 'dsgo:hello' }, source: iframeWindow }));
     const ctxCall = postSpy.mock.calls.find(c => c[0]?.type === 'dsgo:context');
@@ -40,7 +58,28 @@ describe('parent-bridge', () => {
     expect(ctxCall![0].payload.appId).toBe('sample');
   });
 
+  it('routes by event.source so two embeds get their own context', async () => {
+    const a = mountEmbed('1', defaultConfig({
+      context: { bridgeVersion: 1, appId: 'app-a', mode: 'block', locale: 'en-US', theme: 'light', blockProps: null },
+      manifest: { id: 'app-a', name: 'A', permissions: { read: ['posts'], write: [] } },
+    }));
+    const b = mountEmbed('2', defaultConfig({
+      context: { bridgeVersion: 1, appId: 'app-b', mode: 'block', locale: 'en-US', theme: 'light', blockProps: null },
+      manifest: { id: 'app-b', name: 'B', permissions: { read: ['pages'], write: [] } },
+    }));
+    await import('./parent-bridge');
+
+    window.dispatchEvent(new MessageEvent('message', { data: { type: 'dsgo:hello' }, source: a.iframeWindow }));
+    window.dispatchEvent(new MessageEvent('message', { data: { type: 'dsgo:hello' }, source: b.iframeWindow }));
+
+    const aCtx = a.postSpy.mock.calls.find(c => c[0]?.type === 'dsgo:context');
+    const bCtx = b.postSpy.mock.calls.find(c => c[0]?.type === 'dsgo:context');
+    expect(aCtx![0].payload.appId).toBe('app-a');
+    expect(bCtx![0].payload.appId).toBe('app-b');
+  });
+
   it('rejects request without granted permission', async () => {
+    const { iframeWindow, postSpy } = mountEmbed('1', defaultConfig());
     await import('./parent-bridge');
     window.dispatchEvent(new MessageEvent('message', { data: { type: 'dsgo:request', id: 'r1', method: 'user.current' }, source: iframeWindow }));
     const reply = postSpy.mock.calls.find(c => c[0]?.id === 'r1');
@@ -48,6 +87,7 @@ describe('parent-bridge', () => {
   });
 
   it('dispatches granted method via apiFetch', async () => {
+    const { iframeWindow } = mountEmbed('1', defaultConfig());
     await import('./parent-bridge');
     window.dispatchEvent(new MessageEvent('message', { data: { type: 'dsgo:request', id: 'r2', method: 'posts.list', params: { per_page: 5 } }, source: iframeWindow }));
     await new Promise(r => setTimeout(r, 0));
@@ -55,88 +95,66 @@ describe('parent-bridge', () => {
   });
 
   it('handles bridge.ping locally', async () => {
+    const { iframeWindow, postSpy } = mountEmbed('1', defaultConfig());
     await import('./parent-bridge');
     window.dispatchEvent(new MessageEvent('message', { data: { type: 'dsgo:request', id: 'r3', method: 'bridge.ping' }, source: iframeWindow }));
     const reply = postSpy.mock.calls.find(c => c[0]?.id === 'r3');
     expect(reply![0]).toMatchObject({ type: 'dsgo:response', ok: true, data: expect.objectContaining({ ok: true, bridge_version: 1 }) });
   });
+
+  it('ignores messages from windows not registered as DSGo embeds', async () => {
+    const { postSpy } = mountEmbed('1', defaultConfig());
+    await import('./parent-bridge');
+    const stranger = { postMessage: vi.fn() } as unknown as Window;
+    window.dispatchEvent(new MessageEvent('message', { data: { type: 'dsgo:hello' }, source: stranger }));
+    expect(postSpy).not.toHaveBeenCalled();
+  });
 });
 
 describe('parent-bridge resize forwarding', () => {
-  let iframe: HTMLIFrameElement;
-  let iframeWindow: Window;
-  let parentPostSpy: ReturnType<typeof vi.fn>;
-
-  function setupContext(ctx: Partial<BridgeContext> = {}) {
-    window.__dsgoBridgeContext = {
-      bridgeVersion: 1,
-      appId: 'sample',
-      mode: 'block',
-      locale: 'en-US',
-      theme: 'light',
-      blockProps: { autoResize: true },
-      routeParams: {},
-      ...ctx,
-    } as BridgeContext;
-    window.__dsgoNonce = 'nonce-xyz';
-    window.__dsgoManifest = { id: 'sample', name: 'Sample', permissions: { read: ['posts'], write: [] } };
-    window.__dsgoPermissionMap = { 'posts.list': 'posts', 'user.current': 'user', 'bridge.ping': null };
-    window.wp = { apiFetch: vi.fn().mockResolvedValue([]) };
-  }
-
   beforeEach(() => {
-    document.body.innerHTML = '<iframe id="dsgo"></iframe>';
-    iframe = document.getElementById('dsgo') as HTMLIFrameElement;
-    iframeWindow = iframe.contentWindow!;
-    Object.defineProperty(iframeWindow, 'postMessage', { value: vi.fn(), configurable: true });
-    parentPostSpy = vi.fn();
-    Object.defineProperty(window, 'parent', {
-      value: { postMessage: parentPostSpy },
-      configurable: true,
-      writable: true,
-    });
+    document.body.replaceChildren();
+    window.wp = { apiFetch: vi.fn().mockResolvedValue([]) };
     vi.resetModules();
   });
 
   afterEach(() => {
-    const realWindow = window;
-    Object.defineProperty(window, 'parent', { value: realWindow, configurable: true, writable: true });
+    document.body.replaceChildren();
   });
 
-  it('resizes iframe and forwards dsgo:embed:resize to Layer 0 when mode=block and autoResize=true', async () => {
-    setupContext({ mode: 'block', blockProps: { autoResize: true } });
+  it('resizes the iframe when mode=block and autoResize=true', async () => {
+    const { iframe, iframeWindow } = mountEmbed('1', defaultConfig({
+      context: { bridgeVersion: 1, appId: 'sample', mode: 'block', locale: 'en-US', theme: 'light', blockProps: { autoResize: true } },
+    }));
     await import('./parent-bridge');
     window.dispatchEvent(new MessageEvent('message', {
       data: { type: 'dsgo:resize', height: 720 },
       source: iframeWindow,
     }));
     expect(iframe.style.height).toBe('720px');
-    const fwdCall = parentPostSpy.mock.calls.find(c => c[0]?.type === 'dsgo:embed:resize');
-    expect(fwdCall).toBeTruthy();
-    expect(fwdCall![0]).toEqual({ type: 'dsgo:embed:resize', height: 720, appId: 'sample' });
   });
 
-  it('ignores dsgo:resize when mode=page (no resize, no parent post)', async () => {
-    setupContext({ mode: 'page', blockProps: null });
+  it('ignores dsgo:resize when mode=page', async () => {
+    const { iframe, iframeWindow } = mountEmbed('1', defaultConfig({
+      context: { bridgeVersion: 1, appId: 'sample', mode: 'page', locale: 'en-US', theme: 'light', blockProps: null },
+    }));
     await import('./parent-bridge');
     window.dispatchEvent(new MessageEvent('message', {
       data: { type: 'dsgo:resize', height: 720 },
       source: iframeWindow,
     }));
     expect(iframe.style.height).toBe('');
-    const fwdCall = parentPostSpy.mock.calls.find(c => c[0]?.type === 'dsgo:embed:resize');
-    expect(fwdCall).toBeUndefined();
   });
 
-  it('ignores dsgo:resize when mode=block but autoResize=false', async () => {
-    setupContext({ mode: 'block', blockProps: { autoResize: false } });
+  it('ignores dsgo:resize when autoResize=false', async () => {
+    const { iframe, iframeWindow } = mountEmbed('1', defaultConfig({
+      context: { bridgeVersion: 1, appId: 'sample', mode: 'block', locale: 'en-US', theme: 'light', blockProps: { autoResize: false } },
+    }));
     await import('./parent-bridge');
     window.dispatchEvent(new MessageEvent('message', {
       data: { type: 'dsgo:resize', height: 720 },
       source: iframeWindow,
     }));
     expect(iframe.style.height).toBe('');
-    const fwdCall = parentPostSpy.mock.calls.find(c => c[0]?.type === 'dsgo:embed:resize');
-    expect(fwdCall).toBeUndefined();
   });
 });
