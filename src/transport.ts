@@ -274,6 +274,29 @@ async function routeToWp(
       await af({ path: `/dsgo/v1/apps/${manifest.id}/storage/user/${encodeURIComponent(key)}`, method: 'PUT', data: { value }, headers });
       return null;
     }
+    case 'abilities.list': {
+      return await af({ path: `/dsgo/v1/apps/${manifest.id}/abilities`, headers });
+    }
+    case 'abilities.invoke': {
+      const { name, args } = (req.params ?? {}) as { name: string; args?: Record<string, unknown> };
+      // The ability name slug contains "/" — leave it un-encoded so the route
+      // regex (/abilities/<ns>/<name>) matches.
+      return await af({
+        path: `/dsgo/v1/apps/${manifest.id}/abilities/${name}`,
+        method: 'POST',
+        data: args !== undefined ? { args } : {},
+        headers,
+      });
+    }
+    case 'ai.prompt': {
+      const params = (req.params ?? {}) as Record<string, unknown>;
+      return await af({
+        path: `/dsgo/v1/apps/${manifest.id}/ai/prompt`,
+        method: 'POST',
+        data: params,
+        headers,
+      });
+    }
     default:
       throw new Error('unknown method: ' + req.method);
   }

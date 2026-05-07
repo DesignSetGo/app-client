@@ -150,3 +150,67 @@ describe('handleRequest', () => {
     });
   });
 });
+
+describe('transport — abilities methods', () => {
+  const baseDeps = {
+    manifest: { id: 'sample', permissions: { read: ['abilities', 'ai'] as string[] } },
+    permMap: {
+      'abilities.list':   'abilities',
+      'abilities.invoke': 'abilities',
+      'ai.prompt':        'ai',
+      'bridge.ping':      null,
+    } as Record<string, string | null>,
+    nonce: 'NONCE',
+  };
+
+  it('routes abilities.list to GET /dsgo/v1/apps/<id>/abilities', async () => {
+    const apiFetch = vi.fn(async () => [{
+      name: 'yoast/x', label: 'X', description: 'x', category: 'test',
+      input_schema: null, output_schema: null, annotations: {},
+    }]);
+    const req = { type: 'dsgo:request', id: 'r1', method: 'abilities.list' } as const;
+    const resp = await handleRequest(req, { ...baseDeps, apiFetch });
+    expect(resp.ok).toBe(true);
+    expect(apiFetch).toHaveBeenCalledWith(expect.objectContaining({
+      path: '/dsgo/v1/apps/sample/abilities',
+    }));
+  });
+
+  it('routes abilities.invoke to POST /dsgo/v1/apps/<id>/abilities/<name>', async () => {
+    const apiFetch = vi.fn(async () => ({ result: 42 }));
+    const req = { type: 'dsgo:request', id: 'r2', method: 'abilities.invoke',
+      params: { name: 'yoast/x', args: { a: 1 } } } as const;
+    const resp = await handleRequest(req, { ...baseDeps, apiFetch });
+    expect(resp.ok).toBe(true);
+    expect(apiFetch).toHaveBeenCalledWith(expect.objectContaining({
+      path: '/dsgo/v1/apps/sample/abilities/yoast/x',
+      method: 'POST',
+      data: { args: { a: 1 } },
+    }));
+  });
+});
+
+describe('transport — ai.prompt', () => {
+  const baseDeps = {
+    manifest: { id: 'sample', permissions: { read: ['ai'] as string[] } },
+    permMap: { 'ai.prompt': 'ai' } as Record<string, string | null>,
+    nonce: 'NONCE',
+  };
+
+  it('routes ai.prompt to POST /dsgo/v1/apps/<id>/ai/prompt', async () => {
+    const apiFetch = vi.fn(async () => ({
+      content: 'hi', usage: { input_tokens: 1, output_tokens: 1 }, tool_calls: [],
+    }));
+    const req = { type: 'dsgo:request', id: 'r3', method: 'ai.prompt',
+      params: { messages: [{ role: 'user', content: 'hi' }] } } as const;
+    const resp = await handleRequest(req, { ...baseDeps, apiFetch });
+    expect(resp.ok).toBe(true);
+    if (resp.ok) {
+      expect((resp.data as { content: string }).content).toBe('hi');
+    }
+    expect(apiFetch).toHaveBeenCalledWith(expect.objectContaining({
+      path: '/dsgo/v1/apps/sample/ai/prompt',
+      method: 'POST',
+    }));
+  });
+});
