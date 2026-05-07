@@ -54,6 +54,44 @@ describe('handleRequest', () => {
     });
   });
 
+  it('passes through known bridge codes from REST error bodies (e.g. payload_too_large)', async () => {
+    // Storage::app_set throws StorageError('payload_too_large'); REST emits
+    // {code: 'payload_too_large', message: '...'} with HTTP 422. The bridge
+    // must propagate that specific code instead of collapsing to internal_error.
+    const apiFetch = vi.fn().mockRejectedValue(
+      Object.assign(new Error('app storage quota exceeded (300000 > 262144)'), {
+        code: 'payload_too_large',
+        data: { status: 422 },
+      }),
+    );
+    const deps = makeDeps({ apiFetch });
+    const res = await handleRequest(
+      req('storage.app.set', { key: 'big', value: 'x'.repeat(300000) }),
+      deps,
+    );
+    expect(res).toMatchObject({
+      type: 'dsgo:response',
+      id: 'r1',
+      ok: false,
+      error: expect.objectContaining({ code: 'payload_too_large' }),
+    });
+  });
+
+  it('falls back to status-based mapping when REST code is not recognized', async () => {
+    const apiFetch = vi.fn().mockRejectedValue(
+      Object.assign(new Error('forbidden'), {
+        code: 'rest_some_unknown_code',
+        data: { status: 403 },
+      }),
+    );
+    const deps = makeDeps({ apiFetch });
+    const res = await handleRequest(req('site.info'), deps);
+    expect(res).toMatchObject({
+      ok: false,
+      error: expect.objectContaining({ code: 'permission_denied' }),
+    });
+  });
+
   it('dispatches site.info to apiFetch on success', async () => {
     const apiFetch = vi.fn().mockResolvedValue({
       name: 'My Site',
