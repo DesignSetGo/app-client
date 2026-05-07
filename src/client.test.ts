@@ -169,6 +169,108 @@ describe('dsgo.bridge.requestResize', () => {
   });
 });
 
+describe('dsgo.abilities.implement', () => {
+  beforeEach(() => {
+    vi.resetModules();
+    document.head.querySelectorAll('script[id="dsgo-context"]').forEach((n) => n.remove());
+    const tag = document.createElement('script');
+    tag.id = 'dsgo-context';
+    tag.type = 'application/json';
+    tag.textContent = JSON.stringify({
+      bridgeVersion: 1, mode: 'inline', appId: 'sample',
+      locale: 'en-US', theme: 'light', blockProps: null, routeParams: {},
+    });
+    document.head.appendChild(tag);
+  });
+  afterEach(() => {
+    document.getElementById('dsgo-context')?.remove();
+  });
+
+  it('routes ability:<name> requests to the registered handler', async () => {
+    const { dsgo } = await import('./client');
+    dsgo.abilities.implement('sample/echo', async (input: any) => ({ echoed: input }));
+
+    const posted: any[] = [];
+    const origPost = window.postMessage.bind(window);
+    window.postMessage = ((msg: any, target: any) => {
+      posted.push(msg);
+      origPost(msg, target);
+    }) as typeof window.postMessage;
+
+    window.dispatchEvent(new MessageEvent('message', {
+      data: { type: 'dsgo:request', id: 'r1', method: 'ability:sample/echo', params: { hello: 'world' } },
+      source: window,
+    }));
+
+    await new Promise((r) => setTimeout(r, 10));
+    const response = posted.find((m) => m?.type === 'dsgo:response' && m?.id === 'r1');
+    expect(response).toBeDefined();
+    expect(response.ok).toBe(true);
+    expect(response.data).toEqual({ echoed: { hello: 'world' } });
+    window.postMessage = origPost;
+  });
+
+  it('emits dsgo:abilities:ready once per microtask coalescing multiple implements', async () => {
+    const { dsgo } = await import('./client');
+    const posted: any[] = [];
+    const origPost = window.postMessage.bind(window);
+    window.postMessage = ((msg: any, target: any) => {
+      posted.push(msg);
+      origPost(msg, target);
+    }) as typeof window.postMessage;
+
+    dsgo.abilities.implement('sample/a', () => null);
+    dsgo.abilities.implement('sample/b', () => null);
+    dsgo.abilities.implement('sample/c', () => null);
+
+    await new Promise((r) => queueMicrotask(() => r(null)));
+    await new Promise((r) => setTimeout(r, 0));
+
+    const readys = posted.filter((m) => m?.type === 'dsgo:abilities:ready');
+    expect(readys.length).toBe(1);
+    expect(readys[0].implementations.sort()).toEqual(['sample/a', 'sample/b', 'sample/c']);
+    expect(readys[0].app_id).toBe('sample');
+    window.postMessage = origPost;
+  });
+
+  it('handler that throws maps to ability_handler_error', async () => {
+    const { dsgo } = await import('./client');
+    dsgo.abilities.implement('sample/broken', () => { throw new Error('boom'); });
+
+    const posted: any[] = [];
+    const origPost = window.postMessage.bind(window);
+    window.postMessage = ((msg: any, target: any) => {
+      posted.push(msg);
+      origPost(msg, target);
+    }) as typeof window.postMessage;
+
+    window.dispatchEvent(new MessageEvent('message', {
+      data: { type: 'dsgo:request', id: 'r2', method: 'ability:sample/broken', params: {} },
+      source: window,
+    }));
+
+    await new Promise((r) => setTimeout(r, 10));
+    const response = posted.find((m) => m?.type === 'dsgo:response' && m?.id === 'r2');
+    expect(response).toBeDefined();
+    expect(response.ok).toBe(false);
+    expect(response.error.code).toBe('ability_handler_error');
+    expect(response.error.details?.app_error).toContain('boom');
+    window.postMessage = origPost;
+  });
+
+  it('parent dispatch reaches the registered handler', async () => {
+    const { dsgo } = await import('./client');
+    let called = false;
+    dsgo.abilities.implement('sample/whatever', () => { called = true; return 'ok'; });
+    window.dispatchEvent(new MessageEvent('message', {
+      data: { type: 'dsgo:request', id: 'r3', method: 'ability:sample/whatever', params: {} },
+      source: window,
+    }));
+    await new Promise((r) => setTimeout(r, 10));
+    expect(called).toBe(true);
+  });
+});
+
 describe('dsgo.ai.prompt — per-method timeout', () => {
   let realParent: Window;
 

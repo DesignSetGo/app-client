@@ -7,10 +7,12 @@ import {
   type BridgeError,
   type BridgeErrorCode,
   type BridgeMessage,
+  type BridgeRequest,
   type BridgeResponse,
   type AiPromptParams,
   type AiPromptResult,
   type AbilityDescriptor,
+  type AbilityHandler,
 } from './shared';
 
 export class BridgeRequestError extends Error implements BridgeError {
@@ -51,7 +53,13 @@ function loadInlineContext(): BridgeContext | null {
   return null;
 }
 
+/** Unique token for this module instance; used to guard the inline listener against
+ *  stale copies left by vi.resetModules() in tests. */
+const _moduleToken = Symbol('dsgo-module');
+
 const pending = new Map<string, PendingRequest>();
+const abilityHandlers = new Map<string, AbilityHandler<unknown, unknown>>();
+let readyScheduled = false;
 let context: BridgeContext | null = null;
 let resolveReady!: () => void;
 const ready = new Promise<void>((r) => { resolveReady = r; });
@@ -59,6 +67,45 @@ const ready = new Promise<void>((r) => { resolveReady = r; });
 const isInIframe = typeof window !== 'undefined' && window.parent !== window;
 const inlineContext = typeof document !== 'undefined' ? loadInlineContext() : null;
 const isInline = inlineContext !== null;
+
+function scheduleReady(): void {
+  // Mark this module instance as the active handler so stale inline listeners
+  // from prior vi.resetModules() reloads don't claim incoming ability requests.
+  (window as unknown as Record<string | symbol, unknown>)['__dsgoActiveToken'] = _moduleToken;
+  if (readyScheduled) return;
+  readyScheduled = true;
+  queueMicrotask(() => {
+    readyScheduled = false;
+    const target = isInline ? window : window.parent;
+    target.postMessage({
+      type: 'dsgo:abilities:ready',
+      app_id: context?.appId ?? '',
+      implementations: Array.from(abilityHandlers.keys()),
+    }, '*');
+  });
+}
+
+async function dispatchAbility(method: string, id: string, params: unknown, target: Window): Promise<void> {
+  const name = method.slice('ability:'.length);
+  const handler = abilityHandlers.get(name);
+  if (!handler) {
+    target.postMessage({
+      type: 'dsgo:response', id, ok: false,
+      error: { code: 'ability_not_implemented', message: `no handler for "${name}"` },
+    }, '*');
+    return;
+  }
+  try {
+    const data = await handler(params);
+    target.postMessage({ type: 'dsgo:response', id, ok: true, data }, '*');
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    target.postMessage({
+      type: 'dsgo:response', id, ok: false,
+      error: { code: 'ability_handler_error', message: msg, details: { app_error: msg } },
+    }, '*');
+  }
+}
 
 if (isInline) {
   // Inline mode: context is already known from the DOM script tag.
@@ -72,7 +119,21 @@ if (isInline) {
     if (event.source !== null && event.source !== window) return;
     const msg = event.data as BridgeMessage | null;
     if (!msg || typeof msg !== 'object') return;
-    if ((msg as BridgeMessage).type !== 'dsgo:response') return;
+    const type = (msg as BridgeMessage).type;
+
+    if (type === 'dsgo:request') {
+      // Guard: only the active module instance should handle incoming ability requests.
+      // When vi.resetModules() accumulates stale inline listeners, only the module
+      // that last called implement() (and set __dsgoActiveToken) will respond.
+      if ((window as unknown as Record<string | symbol, unknown>)['__dsgoActiveToken'] !== _moduleToken) return;
+      const req = msg as BridgeRequest;
+      if (typeof req.method === 'string' && req.method.startsWith('ability:')) {
+        void dispatchAbility(req.method, req.id, req.params, window);
+      }
+      return;
+    }
+
+    if (type !== 'dsgo:response') return;
     const resp = msg as BridgeResponse;
     const p = pending.get(resp.id);
     if (!p) return;
@@ -92,14 +153,25 @@ if (isInline) {
     if (event.source !== window.parent) return;
     const msg = event.data as BridgeMessage | null;
     if (!msg || typeof msg !== 'object') return;
+    const type = (msg as BridgeMessage).type;
 
-    if ((msg as BridgeMessage).type === 'dsgo:context') {
+    if (type === 'dsgo:context') {
       context = (msg as { type: 'dsgo:context'; payload: BridgeContext }).payload;
       resolveReady();
       return;
     }
 
-    if ((msg as BridgeMessage).type !== 'dsgo:response') return;
+    if (type === 'dsgo:request') {
+      // Guard: only the active module instance should handle incoming ability requests.
+      if ((window as unknown as Record<string | symbol, unknown>)['__dsgoActiveToken'] !== _moduleToken) return;
+      const req = msg as BridgeRequest;
+      if (typeof req.method === 'string' && req.method.startsWith('ability:')) {
+        void dispatchAbility(req.method, req.id, req.params, window.parent);
+      }
+      return;
+    }
+
+    if (type !== 'dsgo:response') return;
     const resp = msg as BridgeResponse;
     const p = pending.get(resp.id);
     if (!p) return;
@@ -228,6 +300,10 @@ export const dsgo = {
     list:   () => call<AbilityDescriptor[]>('abilities.list'),
     invoke: <T = unknown>(name: string, args?: Record<string, unknown>) =>
       call<T>('abilities.invoke', { name, args }),
+    implement<I = unknown, O = unknown>(name: string, handler: AbilityHandler<I, O>): void {
+      abilityHandlers.set(name, handler as AbilityHandler<unknown, unknown>);
+      scheduleReady();
+    },
   },
   ai: {
     prompt: (params: AiPromptParams) => call<AiPromptResult>('ai.prompt', params),
