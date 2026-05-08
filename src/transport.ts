@@ -341,6 +341,25 @@ async function routeToWp(
         headers,
       });
     }
+    // Commerce — route every commerce.* method through the single dispatcher.
+    // Method "commerce.<group>.<verb>" maps to "/commerce/<group>/<verb>"
+    // (verb's underscores translate to hyphens for URL hygiene).
+    case 'commerce.products.list':
+    case 'commerce.products.get':
+    case 'commerce.cart.get':
+    case 'commerce.cart.add_item':
+    case 'commerce.cart.update_item':
+    case 'commerce.cart.remove_item':
+    case 'commerce.checkout.open_hosted_page': {
+      const tail = req.method.slice('commerce.'.length).replace(/\./g, '/').replace(/_/g, '-');
+      const params = (req.params ?? {}) as Record<string, unknown>;
+      return await af({
+        path: `/dsgo/v1/apps/${manifest.id}/commerce/${tail}`,
+        method: 'POST',
+        data: { params },
+        headers,
+      });
+    }
     default:
       throw new Error('unknown method: ' + req.method);
   }
