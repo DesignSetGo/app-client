@@ -1,0 +1,72 @@
+name: Publish to npm
+
+# This workflow runs in the public mirror at github.com/DesignSetGo/app-client.
+# It is mirrored here from the upstream private monorepo's
+# client/.github/workflows/publish.yml — DO NOT edit only here; sync with
+# upstream or the next mirror push will overwrite your changes.
+#
+# Triggers on a tag matching `vX.Y.Z`. The mirror workflow in the upstream
+# monorepo propagates `app-client-vX.Y.Z` tags here as `vX.Y.Z`, so the
+# upstream developer flow is unchanged: bump version, tag in the monorepo,
+# push — the publish lands here.
+#
+# Provenance attestation is enabled because this repo is public, satisfying
+# npm's source-repo visibility requirement.
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to publish (e.g. v0.1.1) — must already exist'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+          cache: 'npm'
+
+      - name: Verify tag matches package.json version
+        env:
+          # Routed through env so the shell never sees raw `${{ … }}`
+          # interpolation — Git ref names are not arbitrary user input
+          # but env-var routing is the standard hardening anyway.
+          REF: ${{ inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          TAG_VERSION="${REF#v}"
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          if [ "$PKG_VERSION" != "$TAG_VERSION" ]; then
+            echo "::error::Tag version '$TAG_VERSION' does not match package.json version '$PKG_VERSION'."
+            exit 1
+          fi
+
+      - name: Install
+        run: npm ci
+
+      - name: Test
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+      - name: Publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --access public --provenance
