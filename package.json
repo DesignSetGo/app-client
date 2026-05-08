@@ -1,6 +1,6 @@
 {
   "name": "@designsetgo/app-client",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Bridge client for DesignSetGo Apps — typed dsgo namespace for apps running inside the WP iframe runtime.",
   "license": "GPL-2.0-or-later",
   "homepage": "https://github.com/DesignSetGo/app-client#readme",
@@ -31,7 +31,9 @@
       "require": "./dist/client.cjs"
     }
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "rollup -c",
     "test": "vitest run --passWithNoTests",
