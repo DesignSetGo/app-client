@@ -311,6 +311,94 @@ export interface CurrentUser {
   roles: string[];
 }
 
+// ---------------------------------------------------------------------------
+// Commerce surface — abilities-first with REST fallback to dsgo.commerce.*
+// ---------------------------------------------------------------------------
+
+export interface CommerceProduct {
+  id: number;
+  name: string;
+  slug: string;
+  permalink: string;
+  description: string;
+  short_description: string;
+  sku: string;
+  price: { amount: string; regular: string; sale: string; currency: string; min: string | null; max: string | null; minor_unit: number };
+  on_sale: boolean;
+  is_in_stock: boolean;
+  is_purchasable: boolean;
+  images: { id: number; src: string; alt: string }[];
+  type: string;
+  has_options: boolean;
+  add_to_cart: Record<string, unknown> | null;
+}
+
+export interface CommerceProductsQuery {
+  page?: number;
+  per_page?: number;
+  search?: string;
+  category?: number | string;
+  tag?: number | string;
+  min_price?: string | number;
+  max_price?: string | number;
+  orderby?: 'date' | 'price' | 'popularity' | 'rating' | 'title' | 'menu_order';
+  order?: 'asc' | 'desc';
+  on_sale?: boolean;
+  featured?: boolean;
+}
+
+export interface CommerceProductsResult { items: CommerceProduct[]; total: number; total_pages: number }
+
+export interface CommerceCartItem {
+  key: string;
+  id: number;
+  name: string;
+  quantity: number;
+  permalink: string;
+  image: string;
+  totals: Record<string, unknown> | null;
+}
+
+export interface CommerceCart {
+  items: CommerceCartItem[];
+  items_count: number;
+  items_weight: number;
+  totals: { total_items: string; total_price: string; currency_code: string; currency_minor_unit: number };
+  needs_shipping: boolean;
+  needs_payment: boolean;
+}
+
+export interface CheckoutHostedResult { url: string; navigated: boolean }
+
+/**
+ * Try invoking a registered ability first; if no matching ability is
+ * registered or the Abilities API is unavailable, fall back to running
+ * `restCall` and return its result.
+ *
+ * Fallback only on the two "this surface doesn't exist here" codes:
+ * `not_found` (ability name not registered) and `not_implemented`
+ * (Abilities API absent — old WP). `permission_denied` is an
+ * authorization decision — the ability exists and refused the visitor —
+ * and MUST propagate; falling back through the REST surface would
+ * silently bypass the ability's per-visitor policy.
+ */
+async function tryAbilityElseRest<T>(
+  abilityName: string,
+  abilityArgs: Record<string, unknown> | undefined,
+  restCall: () => Promise<T>,
+): Promise<T> {
+  try {
+    return await call<T>('abilities.invoke', { name: abilityName, args: abilityArgs });
+  } catch (err) {
+    if (err instanceof BridgeRequestError) {
+      if (err.code === 'not_found' || err.code === 'not_implemented') {
+        return await restCall();
+      }
+    }
+    throw err;
+  }
+}
+
 export const dsgo = {
   ready,
   get context(): BridgeContext | null { return context; },
@@ -372,6 +460,68 @@ export const dsgo = {
         filename: opts?.filename,
         alt_text: opts?.altText,
       }),
+  },
+  commerce: {
+    products: {
+      list: (q?: CommerceProductsQuery) =>
+        tryAbilityElseRest<CommerceProductsResult>(
+          'woocommerce/list-products', q as Record<string, unknown> | undefined,
+          () => call<CommerceProductsResult>('commerce.products.list', q),
+        ),
+      get: (id: number) =>
+        tryAbilityElseRest<CommerceProduct>(
+          'woocommerce/get-product', { id },
+          () => call<CommerceProduct>('commerce.products.get', { id }),
+        ),
+    },
+    cart: {
+      get: () =>
+        tryAbilityElseRest<CommerceCart>(
+          'woocommerce/get-cart', undefined,
+          () => call<CommerceCart>('commerce.cart.get'),
+        ),
+      addItem: (params: { id: number; quantity?: number; variation?: { attribute: string; value: string }[] }) =>
+        tryAbilityElseRest<CommerceCart>(
+          'woocommerce/cart-add-item', params as unknown as Record<string, unknown>,
+          () => call<CommerceCart>('commerce.cart.add_item', params),
+        ),
+      updateItem: (params: { key: string; quantity: number }) =>
+        tryAbilityElseRest<CommerceCart>(
+          'woocommerce/cart-update-item', params as unknown as Record<string, unknown>,
+          () => call<CommerceCart>('commerce.cart.update_item', params),
+        ),
+      removeItem: (params: { key: string }) =>
+        tryAbilityElseRest<CommerceCart>(
+          'woocommerce/cart-remove-item', params as unknown as Record<string, unknown>,
+          () => call<CommerceCart>('commerce.cart.remove_item', params),
+        ),
+    },
+    checkout: {
+      /**
+       * Get the WooCommerce checkout URL and navigate the top window to it.
+       * WC's session cookie carries the cart through the navigation, so the
+       * visitor lands at /checkout/ with their cart intact.
+       *
+       * Returns `{ url, navigated: true }` after the navigation request is
+       * dispatched. In iframe mode the parent does the actual navigation; in
+       * inline mode we navigate the current window directly.
+       */
+      openHostedPage: async (params?: { return_to?: string }): Promise<CheckoutHostedResult> => {
+        const result = await call<{ url: string }>('commerce.checkout.open_hosted_page', params ?? {});
+        const url = result?.url ?? '';
+        if (typeof window === 'undefined' || url === '') {
+          return { url, navigated: false };
+        }
+        // Inline mode: same window. Iframe mode: ask parent to top-navigate
+        // (the sandbox blocks `window.top.location =` from inside the iframe).
+        if (isInline) {
+          window.location.assign(url);
+        } else if (window.parent && window.parent !== window) {
+          window.parent.postMessage({ type: 'dsgo:nav-top', url }, '*');
+        }
+        return { url, navigated: true };
+      },
+    },
   },
   router: {
     navigate: (path: string, opts?: NavigateOptions) =>
