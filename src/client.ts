@@ -278,6 +278,30 @@ export interface EmailSendParams {
 
 export interface EmailSendResult { sent: true }
 
+export interface MediaUploadOptions {
+  /** Override the filename used for the WP attachment. Sanitized server-side. */
+  filename?: string;
+  /** Sets the attachment's alt text (`_wp_attachment_image_alt` meta). */
+  altText?: string;
+}
+
+export interface MediaUploadResult {
+  /** WP attachment post ID. */
+  id: number;
+  /** Public URL of the uploaded file (under `wp-content/uploads/...`). */
+  url: string;
+  /** Final MIME type of the stored file, as detected by WordPress. */
+  mime_type: string;
+  /** Final on-disk filename (after collision resolution). */
+  filename: string;
+  /** Image width in pixels, or null for non-rasterized formats (e.g. SVG). */
+  width: number | null;
+  /** Image height in pixels, or null for non-rasterized formats. */
+  height: number | null;
+  /** Alt text saved against the attachment, or `""` when none was supplied. */
+  alt_text: string;
+}
+
 export interface CurrentUser {
   id: number;
   name: string;
@@ -329,6 +353,25 @@ export const dsgo = {
   },
   email: {
     send: (params: EmailSendParams) => call<EmailSendResult>('email.send', params),
+  },
+  media: {
+    /**
+     * Upload a Blob (or File) to the site's WordPress media library. The
+     * resulting attachment is owned by the current visitor and tagged with
+     * the app id so admins can audit which app produced each asset.
+     *
+     * Core, opt-out: every app gets this method. Apps that don't want to
+     * expose uploads to their users can disable it by adding
+     * `"media": { "uploads": false }` to their manifest. The runtime gate is
+     * the standard WP `upload_files` capability, so anonymous visitors and
+     * subscriber-tier users get `permission_denied` automatically.
+     */
+    upload: (file: Blob, opts?: MediaUploadOptions) =>
+      call<MediaUploadResult>('media.upload', {
+        file,
+        filename: opts?.filename,
+        alt_text: opts?.altText,
+      }),
   },
   router: {
     navigate: (path: string, opts?: NavigateOptions) =>

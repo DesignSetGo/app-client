@@ -214,3 +214,82 @@ describe('transport — ai.prompt', () => {
     }));
   });
 });
+
+describe('transport — media.upload', () => {
+  // media.upload has no manifest permission requirement (it's core, opt-out
+  // server-side), so the permission map entry is null.
+  const baseDeps = {
+    manifest: { id: 'sample', permissions: { read: [] as string[] } },
+    permMap: { 'media.upload': null } as Record<string, string | null>,
+    nonce: 'NONCE',
+  };
+
+  it('routes media.upload to POST /dsgo/v1/apps/<id>/media/upload as multipart', async () => {
+    const apiFetch = vi.fn(async () => ({
+      id: 42,
+      url: 'https://example.com/wp-content/uploads/2026/05/foo.png',
+      mime_type: 'image/png',
+      filename: 'foo.png',
+      width: 64,
+      height: 64,
+      alt_text: 'A red square',
+    }));
+    const file = new Blob([new Uint8Array([1, 2, 3, 4])], { type: 'image/png' });
+    const req = {
+      type: 'dsgo:request', id: 'm1', method: 'media.upload',
+      params: { file, filename: 'foo.png', alt_text: 'A red square' },
+    } as const;
+    const resp = await handleRequest(req, { ...baseDeps, apiFetch });
+    expect(resp.ok).toBe(true);
+    if (resp.ok) {
+      expect((resp.data as { id: number }).id).toBe(42);
+    }
+    const call = apiFetch.mock.calls[0][0] as { path: string; method?: string; body?: BodyInit };
+    expect(call.path).toBe('/dsgo/v1/apps/sample/media/upload');
+    expect(call.method).toBe('POST');
+    expect(call.body).toBeInstanceOf(FormData);
+    const fd = call.body as FormData;
+    expect(fd.get('filename')).toBe('foo.png');
+    expect(fd.get('alt_text')).toBe('A red square');
+    expect(fd.get('file')).toBeInstanceOf(Blob);
+  });
+
+  it('rejects with invalid_params when "file" is not a Blob', async () => {
+    const apiFetch = vi.fn();
+    const req = {
+      type: 'dsgo:request', id: 'm2', method: 'media.upload',
+      params: { file: 'not-a-blob' },
+    } as const;
+    const resp = await handleRequest(req, { ...baseDeps, apiFetch });
+    expect(resp).toMatchObject({
+      ok: false,
+      error: expect.objectContaining({ code: 'invalid_params' }),
+    });
+    expect(apiFetch).not.toHaveBeenCalled();
+  });
+
+  it('falls back to "upload.bin" when no filename is supplied and the Blob has no name', async () => {
+    const apiFetch = vi.fn(async () => ({ id: 1, url: 'u', mime_type: 'image/png', filename: 'upload.bin', width: null, height: null, alt_text: '' }));
+    const file = new Blob([new Uint8Array([1])], { type: 'image/png' });
+    const req = { type: 'dsgo:request', id: 'm3', method: 'media.upload', params: { file } } as const;
+    await handleRequest(req, { ...baseDeps, apiFetch });
+    const fd = (apiFetch.mock.calls[0][0] as { body: FormData }).body;
+    expect(fd.get('filename')).toBe('upload.bin');
+  });
+
+  it('maps server payload_too_large back to a typed bridge error', async () => {
+    const apiFetch = vi.fn().mockRejectedValue(
+      Object.assign(new Error('file exceeds 10485760 bytes (got 20971520)'), {
+        code: 'payload_too_large',
+        data: { status: 413 },
+      }),
+    );
+    const file = new Blob([new Uint8Array(8)], { type: 'image/png' });
+    const req = { type: 'dsgo:request', id: 'm4', method: 'media.upload', params: { file } } as const;
+    const resp = await handleRequest(req, { ...baseDeps, apiFetch });
+    expect(resp).toMatchObject({
+      ok: false,
+      error: expect.objectContaining({ code: 'payload_too_large' }),
+    });
+  });
+});

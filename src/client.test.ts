@@ -108,6 +108,48 @@ describe('bridge client', () => {
   });
 });
 
+describe('dsgo.media.upload', () => {
+  let postMessageSpy: ReturnType<typeof vi.fn>;
+  let realParent: Window;
+
+  beforeEach(() => {
+    postMessageSpy = vi.fn();
+    realParent = window.parent;
+    Object.defineProperty(window, 'parent', {
+      value: { postMessage: postMessageSpy },
+      configurable: true,
+      writable: true,
+    });
+    vi.resetModules();
+  });
+
+  afterEach(() => {
+    Object.defineProperty(window, 'parent', { value: realParent, configurable: true, writable: true });
+  });
+
+  it('posts a media.upload request carrying the Blob unchanged', async () => {
+    const { dsgo } = await import('./client');
+    dispatchFromParent({ type: 'dsgo:context', payload: sampleContext });
+    await dsgo.ready;
+
+    const blob = new Blob([new Uint8Array([0x89, 0x50, 0x4e, 0x47])], { type: 'image/png' });
+    const promise = dsgo.media.upload(blob, { filename: 'pic.png', altText: 'a pic' });
+    await Promise.resolve();
+
+    const sent = findRequest(postMessageSpy, 'media.upload');
+    const params = sent.params as { file: Blob; filename: string; alt_text: string };
+    expect(params.file).toBeInstanceOf(Blob);
+    expect(params.filename).toBe('pic.png');
+    expect(params.alt_text).toBe('a pic');
+
+    dispatchFromParent({
+      type: 'dsgo:response', id: sent.id, ok: true,
+      data: { id: 7, url: 'https://x', mime_type: 'image/png', filename: 'pic.png', width: 1, height: 1, alt_text: 'a pic' },
+    });
+    await expect(promise).resolves.toMatchObject({ id: 7, mime_type: 'image/png' });
+  });
+});
+
 describe('bridge client side-effect gating', () => {
   it('does nothing when imported in a non-iframe context (window.parent === window)', async () => {
     const realParent = window.parent;

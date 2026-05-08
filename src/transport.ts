@@ -24,6 +24,13 @@ export type ApiFetch = (opts: {
   path: string;
   method?: string;
   data?: unknown;
+  /**
+   * Raw request body (e.g. `FormData` for multipart uploads). When set,
+   * `wp.apiFetch` forwards it untouched and lets the browser populate the
+   * `Content-Type` boundary header. Mutually exclusive with `data`, which
+   * would JSON-stringify and clobber the multipart framing.
+   */
+  body?: BodyInit;
   headers?: Record<string, string>;
   parse?: boolean;
 }) => Promise<unknown>;
@@ -127,6 +134,10 @@ export async function handleRequest(
   if (req.method.startsWith('storage.') && appNonce) {
     headers['X-DSGo-App-Nonce'] = appNonce;
   }
+  // Suppress the parent's apiFetch JSON content-type middleware — the
+  // browser will set `multipart/form-data; boundary=...` itself when we
+  // pass FormData as the request body. Setting it manually here would
+  // strip the boundary parameter and break parsing on the PHP side.
 
   try {
     const result = await routeToWp(req, { apiFetch, headers, manifest });
@@ -303,6 +314,30 @@ async function routeToWp(
         path: `/dsgo/v1/apps/${manifest.id}/email/send`,
         method: 'POST',
         data: params,
+        headers,
+      });
+    }
+    case 'media.upload': {
+      const params = (req.params ?? {}) as { file?: unknown; filename?: unknown; alt_text?: unknown };
+      // Accept Blob (the canonical case — SVG, Canvas.toBlob, fetch().blob())
+      // and File (which extends Blob, so the runtime check covers it).
+      if (typeof Blob === 'undefined' || !(params.file instanceof Blob)) {
+        // eslint-disable-next-line no-throw-literal
+        throw { code: 'invalid_params', message: '"file" must be a Blob or File' };
+      }
+      const filename = typeof params.filename === 'string' && params.filename !== ''
+        ? params.filename
+        : (params.file as File).name || 'upload.bin';
+      const formData = new FormData();
+      formData.append('file', params.file, filename);
+      formData.append('filename', filename);
+      if (typeof params.alt_text === 'string' && params.alt_text !== '') {
+        formData.append('alt_text', params.alt_text);
+      }
+      return await af({
+        path: `/dsgo/v1/apps/${manifest.id}/media/upload`,
+        method: 'POST',
+        body: formData,
         headers,
       });
     }
