@@ -371,12 +371,16 @@ export interface CommerceCart {
 export interface CheckoutHostedResult { url: string; navigated: boolean }
 
 /**
- * Try invoking a registered ability first; if missing or the app doesn't
- * have permission, fall back to running `restCall` and return its result.
+ * Try invoking a registered ability first; if no matching ability is
+ * registered or the Abilities API is unavailable, fall back to running
+ * `restCall` and return its result.
  *
- * "Missing" = `not_found`, `not_implemented`, or `permission_denied`. Any
- * other BridgeError is real and rethrown — we don't want to silently swallow
- * server errors.
+ * Fallback only on the two "this surface doesn't exist here" codes:
+ * `not_found` (ability name not registered) and `not_implemented`
+ * (Abilities API absent — old WP). `permission_denied` is an
+ * authorization decision — the ability exists and refused the visitor —
+ * and MUST propagate; falling back through the REST surface would
+ * silently bypass the ability's per-visitor policy.
  */
 async function tryAbilityElseRest<T>(
   abilityName: string,
@@ -387,7 +391,7 @@ async function tryAbilityElseRest<T>(
     return await call<T>('abilities.invoke', { name: abilityName, args: abilityArgs });
   } catch (err) {
     if (err instanceof BridgeRequestError) {
-      if (err.code === 'not_found' || err.code === 'not_implemented' || err.code === 'permission_denied') {
+      if (err.code === 'not_found' || err.code === 'not_implemented') {
         return await restCall();
       }
     }
