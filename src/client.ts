@@ -237,12 +237,32 @@ export interface PostsQuery {
   status?: PostStatus;
 }
 
+/**
+ * Block + theme stylesheets the host attaches to a post when its app's
+ * manifest opts in via `content.blockStyles` / `content.themeStyles`.
+ * Apps render the styles by calling `applyBlockStyles(post.content_styles)`
+ * (or letting the SDK helper handle it). Always null when the manifest
+ * doesn't opt in.
+ */
+export interface PostContentStyles {
+  /** Absolute URLs of <link rel="stylesheet"> sheets to inject. */
+  links: string[];
+  /** Concatenated inline CSS to drop into a <style> block. */
+  inline: string;
+  /** Resolved sources, e.g. ["core","designsetgo","auto","theme:global"]. */
+  sources: string[];
+  /** Byte accounting; `used` may be less than the raw concatenation when the cap kicked in. */
+  budget: { used: number; cap: number };
+}
+
 export interface Post {
   id: number;
   slug: string;
   title: string;
   excerpt: string;
   content: string;
+  /** Optional sibling — present only when the manifest opts in. */
+  content_styles: PostContentStyles | null;
   status: PostStatus;
   protected: boolean;
   date: string;
@@ -399,6 +419,72 @@ async function tryAbilityElseRest<T>(
   }
 }
 
+/**
+ * Inject the host's block + theme stylesheets into the current document so
+ * post HTML rendered into it picks up WP's normal block styling.
+ *
+ * Idempotent and dedup'd: a `data-dsgo-style` attribute is stamped on every
+ * inserted node with a stable key (the URL for `<link>`s, a content hash for
+ * `<style>`s) so repeated calls — including ones triggered by SPA route
+ * changes — never duplicate nodes.
+ *
+ * Returns the count of new nodes appended this call (0 when the input is
+ * null/empty or all nodes were already present).
+ */
+function applyBlockStyles(input: PostContentStyles | Post | null | undefined): number {
+  if (typeof document === 'undefined' || input == null) return 0;
+  const styles: PostContentStyles | null =
+    'content_styles' in (input as object)
+      ? (input as Post).content_styles
+      : (input as PostContentStyles);
+  if (!styles) return 0;
+
+  const head = document.head ?? document.getElementsByTagName('head')[0];
+  if (!head) return 0;
+
+  let appended = 0;
+  const existing = new Set<string>();
+  head.querySelectorAll('[data-dsgo-style]').forEach((el) => {
+    const k = (el as HTMLElement).getAttribute('data-dsgo-style');
+    if (k) existing.add(k);
+  });
+
+  for (const url of styles.links ?? []) {
+    if (typeof url !== 'string' || url === '') continue;
+    if (existing.has('link:' + url)) continue;
+    const link = document.createElement('link');
+    link.rel = 'stylesheet';
+    link.href = url;
+    link.setAttribute('data-dsgo-style', 'link:' + url);
+    head.appendChild(link);
+    existing.add('link:' + url);
+    appended++;
+  }
+
+  if (typeof styles.inline === 'string' && styles.inline !== '') {
+    const key = 'inline:' + cheapHash(styles.inline);
+    if (!existing.has(key)) {
+      const style = document.createElement('style');
+      style.setAttribute('data-dsgo-style', key);
+      style.textContent = styles.inline;
+      head.appendChild(style);
+      appended++;
+    }
+  }
+  return appended;
+}
+
+function cheapHash(s: string): string {
+  // FNV-1a 32-bit; collision risk doesn't matter — we only need stable
+  // dedup keys for inline-style payloads within one document.
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = (h + ((h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24))) >>> 0;
+  }
+  return h.toString(16);
+}
+
 export const dsgo = {
   ready,
   get context(): BridgeContext | null { return context; },
@@ -412,6 +498,23 @@ export const dsgo = {
   pages: {
     list: (q?: Omit<PostsQuery, 'category' | 'tag'>) => call<PostListResult>('pages.list', q),
     get:  (id: number) => call<Post>('pages.get', { id }),
+  },
+  content: {
+    /**
+     * Inject the block + theme stylesheets WordPress would normally enqueue
+     * for a post's content. Idempotent and dedup'd: calling it again with
+     * the same `content_styles` is a no-op. Pass either the styles object
+     * (`post.content_styles`) or the post itself.
+     *
+     * Manifests opt in by declaring `content.blockStyles` (and optionally
+     * `content.themeStyles`). Without that, posts arrive with
+     * `content_styles: null` and this helper returns 0 without doing
+     * anything — safe to call defensively.
+     *
+     * @returns the number of <link> + <style> nodes appended this call.
+     */
+    applyBlockStyles: (input: PostContentStyles | Post | null | undefined): number =>
+      applyBlockStyles(input),
   },
   user: {
     current: () => call<CurrentUser | null>('user.current'),

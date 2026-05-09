@@ -136,6 +136,47 @@ describe('handleRequest', () => {
     });
   });
 
+  it('sends X-DSGo-App-Id on posts.get and shapes through content_styles when present', async () => {
+    const apiFetch = vi.fn().mockResolvedValue({
+      id: 7,
+      slug: 'hello',
+      title:   { rendered: 'Hello' },
+      content: { rendered: '<p>hi</p>' },
+      excerpt: { rendered: 'hi' },
+      content_styles: {
+        links: ['https://example.com/wp-block-library.css'],
+        inline: '/* inline */',
+        sources: ['core'],
+        budget: { used: 12, cap: 262144 },
+      },
+    });
+    const deps = makeDeps({ apiFetch });
+    const res = await handleRequest(req('posts.get', { id: 7 }), deps);
+    expect(res.ok).toBe(true);
+    expect(apiFetch).toHaveBeenCalledWith(expect.objectContaining({
+      path: '/wp/v2/posts/7',
+      headers: expect.objectContaining({ 'X-DSGo-App-Id': 'app1' }),
+    }));
+    expect((res as any).data).toMatchObject({
+      id: 7,
+      content: '<p>hi</p>',
+      content_styles: expect.objectContaining({ sources: ['core'] }),
+    });
+  });
+
+  it('shapes posts without content_styles to content_styles: null', async () => {
+    const apiFetch = vi.fn().mockResolvedValue({
+      id: 8,
+      slug: 'no-styles',
+      title:   { rendered: 'X' },
+      content: { rendered: '<p>x</p>' },
+      excerpt: { rendered: '' },
+    });
+    const deps = makeDeps({ apiFetch });
+    const res = await handleRequest(req('posts.get', { id: 8 }), deps);
+    expect((res as any).data.content_styles).toBeNull();
+  });
+
   it('handles raw Response thrown by wp.apiFetch parse:false path', async () => {
     const responseLike = new Response(
       JSON.stringify({ code: 'rest_invalid_param', message: 'Bad', data: { status: 400, details: { status: { code: 'rest_forbidden_status' } } } }),

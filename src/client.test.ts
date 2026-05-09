@@ -366,3 +366,39 @@ describe('dsgo.ai.prompt — per-method timeout', () => {
     await expect(promise).rejects.toThrow(/timed out/);
   });
 });
+
+describe('dsgo.content.applyBlockStyles', () => {
+  beforeEach(() => {
+    document.head.innerHTML = '';
+  });
+
+  it('appends linked + inline styles to <head> and dedups on repeat', async () => {
+    const { dsgo } = await import('./client');
+    const styles = {
+      links: ['https://example.com/a.css', 'https://example.com/b.css'],
+      inline: '/* hi */',
+      sources: ['core'],
+      budget: { used: 0, cap: 1024 },
+    };
+    expect(dsgo.content.applyBlockStyles(styles)).toBe(3);
+    expect(document.head.querySelectorAll('link[rel="stylesheet"]').length).toBe(2);
+    expect(document.head.querySelectorAll('style').length).toBe(1);
+
+    expect(dsgo.content.applyBlockStyles(styles)).toBe(0);
+    expect(document.head.querySelectorAll('link[rel="stylesheet"]').length).toBe(2);
+    expect(document.head.querySelectorAll('style').length).toBe(1);
+  });
+
+  it('accepts a Post object and returns 0 when content_styles is null', async () => {
+    const { dsgo } = await import('./client');
+    const post = { id: 1, content: '<p>x</p>', content_styles: null } as any;
+    expect(dsgo.content.applyBlockStyles(post)).toBe(0);
+    expect(document.head.children.length).toBe(0);
+  });
+
+  it('returns 0 for null/undefined input', async () => {
+    const { dsgo } = await import('./client');
+    expect(dsgo.content.applyBlockStyles(null)).toBe(0);
+    expect(dsgo.content.applyBlockStyles(undefined)).toBe(0);
+  });
+});

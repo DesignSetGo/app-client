@@ -71,6 +71,9 @@ function shapePost(raw: any): unknown {
     title:              raw.title?.rendered ?? '',
     excerpt:            raw.excerpt?.rendered ?? '',
     content:            raw.content?.rendered ?? '',
+    // Sibling field; only present when the manifest opts in via
+    // `content.blockStyles` / `content.themeStyles`. See class-block-styles.php.
+    content_styles:     raw.content_styles ?? null,
     status:             raw.status,
     protected:          raw.content?.protected ?? raw.excerpt?.protected ?? false,
     date:               raw.date_gmt ? raw.date_gmt + 'Z' : raw.date,
@@ -133,6 +136,14 @@ export async function handleRequest(
   const headers: Record<string, string> = { 'X-WP-Nonce': nonce };
   if (req.method.startsWith('storage.') && appNonce) {
     headers['X-DSGo-App-Nonce'] = appNonce;
+  }
+  // posts/pages calls hit `/wp/v2/...` directly; the server-side
+  // `rest_prepare_post`/`rest_prepare_page` filter reads this header to
+  // resolve the calling app's manifest and attach `content_styles` when the
+  // app has opted in via `content.blockStyles`/`content.themeStyles`. Sent
+  // unconditionally — the server no-ops cleanly when the manifest opts out.
+  if (req.method.startsWith('posts.') || req.method.startsWith('pages.')) {
+    headers['X-DSGo-App-Id'] = manifest.id;
   }
   // Suppress the parent's apiFetch JSON content-type middleware — the
   // browser will set `multipart/form-data; boundary=...` itself when we
