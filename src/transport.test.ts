@@ -164,6 +164,39 @@ describe('handleRequest', () => {
     });
   });
 
+  it('routes posts.list with type to /wp/v2/<type> and strips type from query', async () => {
+    const headers = new Headers({ 'X-WP-Total': '6', 'X-WP-TotalPages': '1' });
+    const apiFetch = vi.fn().mockResolvedValue(new Response(JSON.stringify([]), { headers, status: 200 }));
+    const deps = makeDeps({ apiFetch });
+    const res = await handleRequest(req('posts.list', { type: 'recipe', per_page: 10 }), deps);
+    expect(res.ok).toBe(true);
+    expect(apiFetch).toHaveBeenCalledWith(expect.objectContaining({
+      path: '/wp/v2/recipe?per_page=10',
+    }));
+  });
+
+  it('routes posts.get with type to /wp/v2/<type>/<id>', async () => {
+    const apiFetch = vi.fn().mockResolvedValue({
+      id: 42, slug: 'sourdough', title: { rendered: 'Sourdough' }, content: { rendered: '' }, excerpt: { rendered: '' },
+    });
+    const deps = makeDeps({ apiFetch });
+    const res = await handleRequest(req('posts.get', { id: 42, type: 'recipe' }), deps);
+    expect(res.ok).toBe(true);
+    expect(apiFetch).toHaveBeenCalledWith(expect.objectContaining({
+      path: '/wp/v2/recipe/42',
+    }));
+  });
+
+  it('defaults posts.list with no type to /wp/v2/posts', async () => {
+    const headers = new Headers({ 'X-WP-Total': '0', 'X-WP-TotalPages': '0' });
+    const apiFetch = vi.fn().mockResolvedValue(new Response(JSON.stringify([]), { headers, status: 200 }));
+    const deps = makeDeps({ apiFetch });
+    await handleRequest(req('posts.list', { per_page: 5 }), deps);
+    expect(apiFetch).toHaveBeenCalledWith(expect.objectContaining({
+      path: '/wp/v2/posts?per_page=5',
+    }));
+  });
+
   it('shapes posts without content_styles to content_styles: null', async () => {
     const apiFetch = vi.fn().mockResolvedValue({
       id: 8,

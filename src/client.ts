@@ -227,6 +227,13 @@ async function call<T>(method: string, params?: unknown): Promise<T> {
 export type PostStatus = 'publish' | 'draft' | 'private' | 'pending' | 'future' | 'any';
 
 export interface PostsQuery {
+  /**
+   * Custom post type slug. When omitted, queries the default `post` post type.
+   * The post type must be public and `show_in_rest`; the server enforces the
+   * same visibility and capability rules it would for any other REST consumer.
+   * Example: `dsgo.posts.list({ type: 'recipe', per_page: 10 })`.
+   */
+  type?: string;
   per_page?: number;
   page?: number;
   search?: string;
@@ -335,8 +342,43 @@ export interface CurrentUser {
 // Commerce surface — abilities-first with REST fallback to dsgo.commerce.*
 // ---------------------------------------------------------------------------
 
+export interface CommerceProductAttributeTerm {
+  id: number;
+  name: string;
+  slug: string;
+}
+
+export interface CommerceProductAttribute {
+  id: number;
+  name: string;
+  taxonomy: string;
+  has_variations: boolean;
+  terms: CommerceProductAttributeTerm[];
+}
+
+export interface CommerceProductVariationRef {
+  id: number;
+  attributes: { name: string; value: string }[];
+}
+
+export interface CommerceProductTaxonomyRef {
+  id: number;
+  name: string;
+  slug: string;
+  link: string;
+}
+
+export interface CommerceQuantityLimits {
+  minimum: number;
+  maximum: number;
+  multiple_of: number;
+  editable: boolean;
+}
+
 export interface CommerceProduct {
   id: number;
+  /** Parent product id when this product is a variation child; `0` otherwise. */
+  parent_id: number;
   name: string;
   slug: string;
   permalink: string;
@@ -347,9 +389,23 @@ export interface CommerceProduct {
   on_sale: boolean;
   is_in_stock: boolean;
   is_purchasable: boolean;
-  images: { id: number; src: string; alt: string }[];
+  /** Units left when stock is low; `null` when not tracked or above the threshold. */
+  low_stock_remaining: number | null;
+  sold_individually: boolean;
+  images: { id: number; src: string; thumbnail: string; alt: string }[];
+  /** WC product type: `'simple' | 'variable' | 'variation' | 'grouped' | 'external'` etc. */
   type: string;
+  /** True when the product needs additional input (e.g. variable products with attributes). */
   has_options: boolean;
+  /** Attribute axes the visitor must pick to add a variable product to the cart. */
+  attributes: CommerceProductAttribute[];
+  /** Lightweight refs to each variation. Fetch full price/stock with `products.list({ type: 'variation', parent: id })`. */
+  variations: CommerceProductVariationRef[];
+  categories: CommerceProductTaxonomyRef[];
+  tags: CommerceProductTaxonomyRef[];
+  average_rating: string;
+  review_count: number;
+  quantity_limits: CommerceQuantityLimits | null;
   add_to_cart: Record<string, unknown> | null;
 }
 
@@ -365,6 +421,15 @@ export interface CommerceProductsQuery {
   order?: 'asc' | 'desc';
   on_sale?: boolean;
   featured?: boolean;
+  /** Set to `'variation'` together with `parent` to fetch children of a variable product. */
+  type?: 'simple' | 'variable' | 'variation' | 'grouped' | 'external';
+  /** Parent product id; pair with `type: 'variation'` to fetch fully-priced variation children. */
+  parent?: number;
+  include?: number[];
+  exclude?: number[];
+  slug?: string;
+  sku?: string;
+  stock_status?: 'instock' | 'outofstock' | 'onbackorder';
 }
 
 export interface CommerceProductsResult { items: CommerceProduct[]; total: number; total_pages: number }
@@ -493,7 +558,7 @@ export const dsgo = {
   },
   posts: {
     list: (q?: PostsQuery) => call<PostListResult>('posts.list', q),
-    get:  (id: number) => call<Post>('posts.get', { id }),
+    get:  (id: number, opts?: { type?: string }) => call<Post>('posts.get', { id, ...(opts ?? {}) }),
   },
   pages: {
     list: (q?: Omit<PostsQuery, 'category' | 'tag'>) => call<PostListResult>('pages.list', q),
