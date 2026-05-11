@@ -367,3 +367,167 @@ describe('transport — media.upload', () => {
     });
   });
 });
+
+describe('transport — http.fetch', () => {
+  // http.fetch's manifest permission lives in permissions.http (not in
+  // permissions.read), so the permission map entry is null — the server
+  // bridge enforces the allowlist after the request reaches REST.
+  const baseDeps = {
+    manifest: { id: 'sample', permissions: { read: [] as string[], http: ['api.stripe.com'] } },
+    permMap: { 'http.fetch': null } as Record<string, string | null>,
+    nonce: 'NONCE',
+  };
+
+  it('routes http.fetch to POST /dsgo/v1/apps/<id>/http/fetch with flattened init', async () => {
+    const apiFetch = vi.fn(async () => ({
+      ok: true, status: 200,
+      headers: { 'content-type': 'application/json' },
+      body: { id: 'ch_1', amount: 100 },
+    }));
+    const request = {
+      type: 'dsgo:request', id: 'h1', method: 'http.fetch',
+      params: {
+        url: 'https://api.stripe.com/v1/charges',
+        init: { method: 'POST', headers: { Authorization: 'Bearer {{SK}}' }, body: 'amount=100' },
+      },
+    } as const;
+    const resp = await handleRequest(request, { ...baseDeps, apiFetch });
+    expect(resp.ok).toBe(true);
+
+    const call = apiFetch.mock.calls[0][0] as { path: string; method?: string; data?: Record<string, unknown> };
+    expect(call.path).toBe('/dsgo/v1/apps/sample/http/fetch');
+    expect(call.method).toBe('POST');
+    // The init object is flattened next to `url` so the REST args[] declaration
+    // can validate each field by name.
+    expect(call.data).toMatchObject({
+      url: 'https://api.stripe.com/v1/charges',
+      method: 'POST',
+      headers: { Authorization: 'Bearer {{SK}}' },
+      body: 'amount=100',
+    });
+  });
+
+  it('propagates http_rate_limited from the server', async () => {
+    const apiFetch = vi.fn().mockRejectedValue(
+      Object.assign(new Error('per-app HTTP rate limit exceeded'), {
+        code: 'http_rate_limited',
+        data: { status: 429, retry_after_seconds: 17 },
+      }),
+    );
+    const request = {
+      type: 'dsgo:request', id: 'h2', method: 'http.fetch',
+      params: { url: 'https://api.stripe.com/v1/charges', init: {} },
+    } as const;
+    const resp = await handleRequest(request, { ...baseDeps, apiFetch });
+    expect(resp).toMatchObject({
+      ok: false,
+      error: expect.objectContaining({ code: 'http_rate_limited' }),
+    });
+  });
+
+  it('propagates http_host_not_allowed when the server rejects the URL', async () => {
+    const apiFetch = vi.fn().mockRejectedValue(
+      Object.assign(new Error('host "api.notion.com" is not in the manifest allowlist'), {
+        code: 'http_host_not_allowed',
+        data: { status: 422 },
+      }),
+    );
+    const request = {
+      type: 'dsgo:request', id: 'h3', method: 'http.fetch',
+      params: { url: 'https://api.notion.com/v1/pages', init: {} },
+    } as const;
+    const resp = await handleRequest(request, { ...baseDeps, apiFetch });
+    expect(resp).toMatchObject({
+      ok: false,
+      error: expect.objectContaining({ code: 'http_host_not_allowed' }),
+    });
+  });
+
+  it('forwards minimal init when caller omits everything but the URL', async () => {
+    // dsgo.http.fetch(url) — init is undefined; the client passes it through
+    // as undefined, the transport flattens `{ url }` with no extra fields.
+    const apiFetch = vi.fn(async () => ({ ok: true, status: 200, headers: {}, body: '' }));
+    const request = {
+      type: 'dsgo:request', id: 'h4', method: 'http.fetch',
+      params: { url: 'https://api.stripe.com/v1/balance' },
+    } as const;
+    await handleRequest(request, { ...baseDeps, apiFetch });
+    const call = apiFetch.mock.calls[0][0] as { data: Record<string, unknown> };
+    expect(call.data).toEqual({ url: 'https://api.stripe.com/v1/balance' });
+  });
+
+  it('rejects a caller-supplied `init.url` override (defense against a buggy wrapper)', async () => {
+    // The TS surface forbids `url` inside init, but a non-TS caller (or a
+    // wrapper that hasn't been TS-checked) could try to slip one in. The
+    // transport flattens with `url` LAST so params.url always wins.
+    const apiFetch = vi.fn(async () => ({ ok: true, status: 200, headers: {}, body: '' }));
+    const request = {
+      type: 'dsgo:request', id: 'h5', method: 'http.fetch',
+      params: {
+        url: 'https://api.stripe.com/v1/balance',
+        // intentionally malicious shape: a "bridge" init with its own URL
+        init: { url: 'http://evil.example/private', method: 'POST' },
+      },
+    } as const;
+    await handleRequest(request, { ...baseDeps, apiFetch });
+    const call = apiFetch.mock.calls[0][0] as { data: { url: string; method: string } };
+    expect(call.data.url).toBe('https://api.stripe.com/v1/balance');
+    expect(call.data.method).toBe('POST');
+  });
+});
+
+describe('transport — help.method', () => {
+  const baseDeps = {
+    manifest: { id: 'sample', permissions: { read: [] as string[] } },
+    permMap: { 'help.method': null } as Record<string, string | null>,
+    nonce: 'NONCE',
+  };
+
+  it('routes help.method to GET /dsgo/v1/apps/<id>/help/methods/<name>', async () => {
+    const apiFetch = vi.fn(async () => ({
+      signature: 'dsgo.posts.list(query?: PostsQuery): Promise<{ items: Post[] }>',
+      description: 'Paginated list of posts.',
+      errors: ['permission_denied', 'invalid_params'],
+      examples: ["const { items } = await dsgo.posts.list({ per_page: 20 });"],
+    }));
+    const request = {
+      type: 'dsgo:request', id: 'help1', method: 'help.method',
+      params: { name: 'posts.list' },
+    } as const;
+    const resp = await handleRequest(request, { ...baseDeps, apiFetch });
+    expect(resp.ok).toBe(true);
+    const call = apiFetch.mock.calls[0][0] as { path: string; method?: string };
+    expect(call.path).toBe('/dsgo/v1/apps/sample/help/methods/posts.list');
+    // GET — no explicit method should be set (apiFetch defaults to GET).
+    expect(call.method).toBeUndefined();
+  });
+
+  it('URL-encodes the method name to neutralize path-traversal attempts', async () => {
+    // A method name containing `/`, `..`, or other URL-meaningful bytes
+    // must not be able to escape the help/methods/<name> path. The
+    // registry will still return not_found for the encoded literal, but
+    // the request must not reach a sibling REST route by accident.
+    const apiFetch = vi.fn(async () => ({ signature: '', description: '', errors: [], examples: [] }));
+    const request = {
+      type: 'dsgo:request', id: 'help2', method: 'help.method',
+      params: { name: '../../wp-admin' },
+    } as const;
+    await handleRequest(request, { ...baseDeps, apiFetch });
+    const call = apiFetch.mock.calls[0][0] as { path: string };
+    expect(call.path).toBe('/dsgo/v1/apps/sample/help/methods/..%2F..%2Fwp-admin');
+  });
+
+  it('rejects empty name with invalid_params before hitting the server', async () => {
+    const apiFetch = vi.fn();
+    const request = {
+      type: 'dsgo:request', id: 'help3', method: 'help.method',
+      params: { name: '' },
+    } as const;
+    const resp = await handleRequest(request, { ...baseDeps, apiFetch });
+    expect(resp).toMatchObject({
+      ok: false,
+      error: expect.objectContaining({ code: 'invalid_params' }),
+    });
+    expect(apiFetch).not.toHaveBeenCalled();
+  });
+});

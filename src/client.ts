@@ -12,6 +12,9 @@ import {
   type AiPromptResult,
   type AbilityDescriptor,
   type AbilityHandler,
+  type BridgeMethodHelp,
+  type HttpFetchInit,
+  type HttpFetchResult,
 } from './shared';
 import { BridgeRequestError } from './client-error';
 import {
@@ -610,6 +613,23 @@ export const dsgo = {
   email: {
     send: (params: EmailSendParams) => call<EmailSendResult>('email.send', params),
   },
+  http: {
+    /**
+     * Server-mediated outbound HTTP request. The app never sees the
+     * credentials referenced via `{{ALIAS}}` tokens in init.headers —
+     * those resolve from the per-app vault at the server, and the
+     * resolved values never round-trip back into the response.
+     *
+     * Only https:// URLs whose host matches a manifest entry under
+     * `permissions.http` are allowed; everything else rejects with
+     * `http_host_not_allowed` (or `http_invalid_url` for non-https).
+     * 30x responses are surfaced verbatim — the proxy does not follow
+     * redirects, so apps that need to chase a Location header must
+     * re-call fetch with the new URL themselves.
+     */
+    fetch: (url: string, init?: HttpFetchInit) =>
+      call<HttpFetchResult>('http.fetch', { url, init }),
+  },
   media: {
     /**
      * Upload a Blob (or File) to the site's WordPress media library. The
@@ -700,6 +720,19 @@ export const dsgo = {
         },
       }),
     subscribe: (handler: (loc: RouterLocation) => void) => routerSubscribe(handler),
+  },
+  help: {
+    /**
+     * Look up a bridge method's full documentation at runtime.
+     *
+     * Always available — no manifest permission required. Returns
+     * `{ signature, description, errors, examples }` for known methods, or
+     * throws a BridgeError with code `not_found` for unknown ones.
+     *
+     * Useful for: discovering methods not enumerated in your harness prompt,
+     * confirming a method's exact parameter shape, generating in-app help text.
+     */
+    method: (name: string) => call<BridgeMethodHelp>('help.method', { name }),
   },
   bridge: {
     ping: () => call<{ ok: true; bridge_version: number; server_time: string }>('bridge.ping'),

@@ -215,6 +215,16 @@ async function routeToWp(
   const { apiFetch: af, headers, manifest } = ctx;
 
   switch (req.method) {
+    case 'help.method': {
+      // Always-available bridge method docs lookup. No permission gate.
+      // The model uses this to discover method signatures without the
+      // harness having to enumerate every method in the system prompt.
+      const { name } = (req.params ?? {}) as { name?: string };
+      if (typeof name !== 'string' || name === '') {
+        throw { code: 'invalid_params', message: 'name is required' };
+      }
+      return await af({ path: `/dsgo/v1/apps/${manifest.id}/help/methods/${encodeURIComponent(name)}`, headers });
+    }
     case 'site.info': {
       // The built-in WP REST root index (`/`) doesn't expose admin_email,
       // language, or the date/time formats — call our /dsgo/v1/site-info
@@ -356,6 +366,21 @@ async function routeToWp(
         path: `/dsgo/v1/apps/${manifest.id}/media/upload`,
         method: 'POST',
         body: formData,
+        headers,
+      });
+    }
+    case 'http.fetch': {
+      // The client wrapper passes { url, init } in params; flatten to a
+      // single payload so the REST args declaration matches (url at top
+      // level, with method/headers/body/timeout_ms siblings). URL goes
+      // LAST so a caller-supplied `init.url` cannot override params.url —
+      // belt-and-suspenders against a wrapper that hasn't been TS-checked.
+      const params = (req.params ?? {}) as { url?: unknown; init?: Record<string, unknown> };
+      const init   = (params.init ?? {}) as Record<string, unknown>;
+      return await af({
+        path: `/dsgo/v1/apps/${manifest.id}/http/fetch`,
+        method: 'POST',
+        data: { ...init, url: params.url },
         headers,
       });
     }

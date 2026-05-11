@@ -15,6 +15,23 @@ export const BRIDGE_ERROR_CODES = [
   'app_load_failed',
   'ability_not_implemented',
   'ability_timeout',
+  // HTTP proxy errors — soft TS-break for apps that exhaustively switch
+  // over BridgeError.code (add new arms or fall through `default:`).
+  'http_permission_denied',
+  'http_invalid_url',
+  'http_method_not_allowed',
+  'http_host_not_allowed',
+  'http_invalid_header',
+  'http_invalid_body',
+  'http_unknown_secret',
+  'http_secret_not_set',
+  'http_ssrf_blocked',
+  'http_request_too_large',
+  'http_response_too_large',
+  'http_timeout',
+  'http_rate_limited',
+  'http_network_error',
+  'sodium_unavailable',
 ] as const;
 
 export type BridgeErrorCode = (typeof BRIDGE_ERROR_CODES)[number];
@@ -102,6 +119,17 @@ export type Role = 'user' | 'assistant' | 'system';
 
 export interface PromptMessage { role: Role; content: string }
 
+/**
+ * Shape returned by `dsgo.help.method(name)`. Mirrors the entry shape in
+ * `dsgo-apps/data/bridge-methods.json` — see `Bridge_Method_Registry` PHP-side.
+ */
+export interface BridgeMethodHelp {
+  signature: string;
+  description: string;
+  errors: string[];
+  examples: string[];
+}
+
 export interface AbilityDescriptor {
   name: string;
   label: string;
@@ -129,6 +157,50 @@ export interface AiPromptResult {
   content: string;
   usage: { input_tokens: number; output_tokens: number };
   tool_calls: AiToolCallRecord[];
+}
+
+// HTTP proxy bridge surface --------------------------------------------
+
+export type HttpFetchMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' | 'HEAD';
+
+export interface HttpFetchInit {
+  method?: HttpFetchMethod;
+  headers?: Record<string, string>;
+  /**
+   * Request body, already serialized. The proxy does NOT accept structured
+   * objects — apps that want to send JSON must `JSON.stringify(...)` and
+   * set `Content-Type` themselves. This matches the cross-host fetch API
+   * surface and avoids ambiguous server-side coercion.
+   */
+  body?: string;
+  /**
+   * Upstream timeout, clamped server-side to [1000, 30000] ms. Network
+   * latency above this raises `http_timeout`.
+   */
+  timeout_ms?: number;
+}
+
+export interface HttpFetchResult {
+  ok: true;
+  /**
+   * Upstream HTTP status code. 30x is surfaced verbatim — the proxy does
+   * not follow redirects so apps that need to chase a Location header
+   * have to issue the follow-up request themselves.
+   */
+  status: number;
+  /**
+   * Response headers with `Set-Cookie` / `Set-Cookie2` stripped. Names are
+   * preserved as-sent by the upstream; compare with `toLowerCase()` if you
+   * need case-insensitive lookup. When the upstream returned an
+   * `application/(*+)?json` content type that failed to parse, a synthetic
+   * `X-Dsgo-Json-Parse-Error: 1` is set and `body` stays as the raw string.
+   */
+  headers: Record<string, string>;
+  /**
+   * Auto-parsed JSON object for `application/(*+)?json` responses;
+   * otherwise the raw response body as a string.
+   */
+  body: unknown;
 }
 
 export function isBridgeError(value: unknown): value is BridgeError {

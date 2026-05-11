@@ -299,6 +299,21 @@ async function handleIframeRequest(owner: IframeEntry, req: BridgeRequest): Prom
   }
 
   const cfg = owner.appConfig;
+  // The publish-side permMap is intentionally a subset of the main bridge's
+  // surface. Methods deliberately NOT exposed to embedded apps via the
+  // parent-bridge-publish channel:
+  //   - `email.send` / `media.upload` — would let an embedded app act on the
+  //     host site's behalf (send mail / write to media library) outside the
+  //     visibility of the host's own permission gates.
+  //   - `commerce.*` — host-site WooCommerce surface; embedded apps shouldn't
+  //     touch the host's cart or product catalog.
+  //   - `http.fetch` — by design in v1: an embedded app calling the proxy
+  //     would resolve secrets against the host site's vault. That's the wrong
+  //     blast radius — the credential belongs to the host operator, not the
+  //     publisher. Embedded apps that need outbound HTTP should make the call
+  //     from their own bundle context (where they own the vault).
+  // Any method omitted here returns `unknown_method` to the embedded app,
+  // which is the right signal for "this surface is intentionally not here."
   const permMap: Record<string, string | null> = {
     'site.info': 'site_info',
     'posts.list': 'posts',
@@ -312,6 +327,7 @@ async function handleIframeRequest(owner: IframeEntry, req: BridgeRequest): Prom
     'storage.user.get': null,
     'storage.user.set': null,
     'bridge.ping': null,
+    'help.method': null,
     'abilities.list': 'abilities',
     'abilities.invoke': 'abilities',
     'ai.prompt': 'ai',
