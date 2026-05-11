@@ -14,7 +14,7 @@ const baseConfig = {
   apps: [
     {
       id: 'sample',
-      bundle_url: 'http://example.test/wp-content/uploads/dsgo-apps/sample/index.html',
+      bundle_url: 'http://example.test/wp-content/uploads/designsetgo-apps/sample/index.html',
       permissions: { read: ['posts'], write: [] },
       abilities: [{
         name: 'sample/echo',

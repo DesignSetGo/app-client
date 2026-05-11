@@ -32,7 +32,7 @@ await dsgo.storage.set('preferred-color', 'blue');
 const reply = await dsgo.ai.prompt({ prompt: 'Summarize this post', context: { post_id: 42 } });
 ```
 
-The full bridge surface — every method, every error code, every permission — is documented in the spec: [BRIDGE-API.md](https://github.com/DesignSetGo/dsgo-apps/blob/main/BRIDGE-API.md).
+The full bridge surface — every method, every error code, every permission — is documented in the spec: [BRIDGE-API.md](https://github.com/DesignSetGo/designsetgo-apps/blob/main/BRIDGE-API.md).
 
 ## Transports
 
@@ -40,11 +40,11 @@ The client auto-detects whether it's running inside an iframe-mode app or an inl
 
 ## Versioning
 
-Pre-1.0. The bridge **protocol** (`bridge_version: 1`) is frozen; this client's version tracks SDK ergonomics, types, and helper methods. A major bump here does not imply a wire-protocol break — see [BRIDGE-API.md](https://github.com/DesignSetGo/dsgo-apps/blob/main/BRIDGE-API.md) for the protocol contract.
+Pre-1.0. The bridge **protocol** (`bridge_version: 1`) is frozen; this client's version tracks SDK ergonomics, types, and helper methods. A major bump here does not imply a wire-protocol break — see [BRIDGE-API.md](https://github.com/DesignSetGo/designsetgo-apps/blob/main/BRIDGE-API.md) for the protocol contract.
 
 ## Development
 
-This repository is a public mirror. The source of truth lives in the DesignSetGo Apps monorepo and is mirrored here on every change. File issues here for bridge-client bugs; other DesignSetGo Apps issues (plugin, runtime, CLI) live at the [main project repo](https://github.com/DesignSetGo/dsgo-apps).
+This repository is a public mirror. The source of truth lives in the DesignSetGo Apps monorepo and is mirrored here on every change. File issues here for bridge-client bugs; other DesignSetGo Apps issues (plugin, runtime, CLI) live at the [main project repo](https://github.com/DesignSetGo/designsetgo-apps).
 
 ```bash
 npm install

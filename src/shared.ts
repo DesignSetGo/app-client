@@ -121,7 +121,7 @@ export interface PromptMessage { role: Role; content: string }
 
 /**
  * Shape returned by `dsgo.help.method(name)`. Mirrors the entry shape in
- * `dsgo-apps/data/bridge-methods.json` — see `Bridge_Method_Registry` PHP-side.
+ * `designsetgo-apps/data/bridge-methods.json` — see `Bridge_Method_Registry` PHP-side.
  */
 export interface BridgeMethodHelp {
   signature: string;

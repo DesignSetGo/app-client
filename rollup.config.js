@@ -1,10 +1,10 @@
 import typescript from '@rollup/plugin-typescript';
 import dts from 'rollup-plugin-dts';
 
-// Plugin runtime bundles ship inside the free plugin at dsgo-apps/assets/.
+// Plugin runtime bundles ship inside the free plugin at designsetgo-apps/assets/.
 // They are loaded via plugins_url('assets/<file>.js', DSGO_APPS_FILE) so the
 // rollup output path must match the on-disk plugin directory.
-const PLUGIN_ASSETS = '../dsgo-apps/assets';
+const PLUGIN_ASSETS = '../designsetgo-apps/assets';
 
 export default [
   // IIFE: bridge-client.js auto-injected into apps' iframes
