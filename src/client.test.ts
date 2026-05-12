@@ -94,6 +94,35 @@ describe('bridge client', () => {
     await expect(promise).rejects.toHaveProperty('code', 'permission_denied');
   });
 
+  it('surfaces execute_php_class_not_loadable from dsgo.abilities.invoke as a typed BridgeRequestError', async () => {
+    // Task 16 of the cron+webhooks plan. The publisher (server-side)
+    // registers a sentinel WP_Error('execute_php_class_not_loadable')
+    // when an ability declares execute_php but the companion plugin's
+    // class is missing. dsgo.abilities.invoke from JS must surface
+    // that PHP error code unchanged so an in-browser caller can show
+    // a "companion plugin missing" affordance rather than a generic
+    // "ability error" toast.
+    const { dsgo, BridgeRequestError } = await import('./client');
+    dispatchFromParent({ type: 'dsgo:context', payload: sampleContext });
+    await dsgo.ready;
+
+    const promise = dsgo.abilities.invoke('sample/inactive', {});
+    await Promise.resolve();
+    const sent = findRequest(postMessageSpy, 'abilities.invoke');
+    dispatchFromParent({
+      type:  'dsgo:response',
+      id:    sent.id,
+      ok:    false,
+      error: {
+        code:    'execute_php_class_not_loadable',
+        message: 'Companion plugin not installed: class Acme\\Plugin\\Nonexistent is not loadable.',
+      },
+    });
+
+    await expect(promise).rejects.toBeInstanceOf(BridgeRequestError);
+    await expect(promise).rejects.toHaveProperty('code', 'execute_php_class_not_loadable');
+  });
+
   it('times out 30s after context arrives', async () => {
     vi.useFakeTimers();
     const { dsgo, BridgeRequestError } = await import('./client');
