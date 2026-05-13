@@ -54,6 +54,34 @@ describe('handleRequest', () => {
     });
   });
 
+  it('tags manifest-guard permission_denied with details so probes can fall back', async () => {
+    // The commerce surface probes the Abilities API first and falls back to
+    // the REST surface only on "this surface doesn't exist here" codes. When
+    // the app's manifest doesn't declare `abilities`, the client-side guard
+    // must mark its denial as manifest_permission_missing so that internal
+    // probe can distinguish it from a runtime "this ability said no" and
+    // honor the documented abilities-first/REST-fallback contract.
+    const deps = makeDeps({
+      permMap: {
+        ...makeDeps().permMap,
+        'abilities.invoke': 'abilities',
+      },
+    });
+    const res = await handleRequest(
+      req('abilities.invoke', { name: 'woocommerce/list-products', args: {} }),
+      deps,
+    );
+    expect(res).toMatchObject({
+      type: 'dsgo:response',
+      id: 'r1',
+      ok: false,
+      error: expect.objectContaining({
+        code: 'permission_denied',
+        details: { reason: 'manifest_permission_missing', permission: 'abilities' },
+      }),
+    });
+  });
+
   it('passes through known bridge codes from REST error bodies (e.g. payload_too_large)', async () => {
     // Storage::app_set throws StorageError('payload_too_large'); REST emits
     // {code: 'payload_too_large', message: '...'} with HTTP 422. The bridge

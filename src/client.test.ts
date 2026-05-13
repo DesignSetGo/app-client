@@ -31,6 +31,15 @@ function findRequest(postSpy: ReturnType<typeof vi.fn>, method?: string) {
   return call[0] as { type: 'dsgo:request'; id: string; method: string; params?: unknown };
 }
 
+async function waitForRequest(postSpy: ReturnType<typeof vi.fn>, method: string, maxTicks = 20) {
+  for (let i = 0; i < maxTicks; i++) {
+    const hit = postSpy.mock.calls.find(c => c[0]?.type === 'dsgo:request' && c[0]?.method === method);
+    if (hit) return;
+    await Promise.resolve();
+  }
+  throw new Error(`waited for dsgo:request for ${method} but it never posted`);
+}
+
 describe('bridge client', () => {
   let postMessageSpy: ReturnType<typeof vi.fn>;
   let realParent: Window;
@@ -134,6 +143,114 @@ describe('bridge client', () => {
     vi.advanceTimersByTime(30_001);
     await expect(promise).rejects.toBeInstanceOf(BridgeRequestError);
     await expect(promise).rejects.toHaveProperty('code', 'internal_error');
+  });
+});
+
+describe('dsgo.commerce abilities-first fallback', () => {
+  let postMessageSpy: ReturnType<typeof vi.fn>;
+  let realParent: Window;
+
+  beforeEach(() => {
+    postMessageSpy = vi.fn();
+    realParent = window.parent;
+    Object.defineProperty(window, 'parent', {
+      value: { postMessage: postMessageSpy },
+      configurable: true,
+      writable: true,
+    });
+    vi.resetModules();
+  });
+
+  afterEach(() => {
+    Object.defineProperty(window, 'parent', { value: realParent, configurable: true, writable: true });
+  });
+
+  it('falls back to the REST surface when the abilities probe is refused for lack of manifest permission', async () => {
+    // An app that declares `commerce` but not `abilities` calls
+    // dsgo.commerce.products.get(54). The internal probe attempts
+    // abilities.invoke('woocommerce/get-product', ...); the client-side
+    // manifest guard rejects with permission_denied + the manifest_permission_missing
+    // details marker. The fallback in tryAbilityElseRest must honor that
+    // marker and dispatch the REST call instead of throwing.
+    const { dsgo } = await import('./client');
+    dispatchFromParent({ type: 'dsgo:context', payload: sampleContext });
+    await dsgo.ready;
+
+    const promise = dsgo.commerce.products.get(54);
+    await Promise.resolve();
+
+    const probe = findRequest(postMessageSpy, 'abilities.invoke');
+    expect(probe.params).toMatchObject({ name: 'woocommerce/get-product', args: { id: 54 } });
+    dispatchFromParent({
+      type:  'dsgo:response',
+      id:    probe.id,
+      ok:    false,
+      error: {
+        code:    'permission_denied',
+        message: 'app does not have "abilities" permission',
+        details: { reason: 'manifest_permission_missing', permission: 'abilities' },
+      },
+    });
+
+    await waitForRequest(postMessageSpy, 'commerce.products.get');
+    const restCall = findRequest(postMessageSpy, 'commerce.products.get');
+    expect(restCall.params).toMatchObject({ id: 54 });
+    dispatchFromParent({
+      type: 'dsgo:response', id: restCall.id, ok: true,
+      data: { id: 54, name: 'Donate to our Plugin', type: 'variable' },
+    });
+    await expect(promise).resolves.toMatchObject({ id: 54, name: 'Donate to our Plugin' });
+  });
+
+  it('propagates permission_denied without the marker (runtime ability denial)', async () => {
+    // The abilities runtime rejects the visitor — the ability exists but
+    // policy refused — so the error MUST surface to the caller. Falling back
+    // through REST would silently bypass the per-visitor ability policy.
+    const { dsgo, BridgeRequestError } = await import('./client');
+    dispatchFromParent({ type: 'dsgo:context', payload: sampleContext });
+    await dsgo.ready;
+
+    const promise = dsgo.commerce.cart.addItem({ id: 54, quantity: 1 });
+    await Promise.resolve();
+
+    const probe = findRequest(postMessageSpy, 'abilities.invoke');
+    dispatchFromParent({
+      type:  'dsgo:response',
+      id:    probe.id,
+      ok:    false,
+      error: { code: 'permission_denied', message: 'ability not in abilities.consumes' },
+    });
+
+    await expect(promise).rejects.toBeInstanceOf(BridgeRequestError);
+    await expect(promise).rejects.toHaveProperty('code', 'permission_denied');
+    // No REST follow-up should have been posted.
+    const rest = postMessageSpy.mock.calls.find(c => c[0]?.type === 'dsgo:request' && c[0]?.method === 'commerce.cart.add_item');
+    expect(rest).toBeUndefined();
+  });
+
+  it('falls back on not_found (ability simply not registered)', async () => {
+    const { dsgo } = await import('./client');
+    dispatchFromParent({ type: 'dsgo:context', payload: sampleContext });
+    await dsgo.ready;
+
+    const promise = dsgo.commerce.products.list({ per_page: 1 });
+    await Promise.resolve();
+
+    const probe = findRequest(postMessageSpy, 'abilities.invoke');
+    dispatchFromParent({
+      type:  'dsgo:response',
+      id:    probe.id,
+      ok:    false,
+      error: { code: 'not_found', message: 'ability not registered' },
+    });
+
+    await waitForRequest(postMessageSpy, 'commerce.products.list');
+    const restCall = findRequest(postMessageSpy, 'commerce.products.list');
+    dispatchFromParent({
+      type: 'dsgo:response', id: restCall.id, ok: true,
+      data: { items: [], total: 0, total_pages: 0 },
+    });
+    await expect(promise).resolves.toEqual({ items: [], total: 0, total_pages: 0 });
   });
 });
 

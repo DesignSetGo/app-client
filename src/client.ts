@@ -463,12 +463,22 @@ export interface CheckoutHostedResult { url: string; navigated: boolean }
  * registered or the Abilities API is unavailable, fall back to running
  * `restCall` and return its result.
  *
- * Fallback only on the two "this surface doesn't exist here" codes:
- * `not_found` (ability name not registered) and `not_implemented`
- * (Abilities API absent — old WP). `permission_denied` is an
- * authorization decision — the ability exists and refused the visitor —
- * and MUST propagate; falling back through the REST surface would
- * silently bypass the ability's per-visitor policy.
+ * Fallbacks:
+ *  - `not_found` — the ability name isn't registered on this site.
+ *  - `not_implemented` — the Abilities API isn't available (old WP).
+ *  - `permission_denied` ONLY when `details.reason === 'manifest_permission_missing'`
+ *    — i.e. the app's manifest doesn't declare `abilities` permission, so the
+ *    client-side guard refused the probe before any ability could even be
+ *    consulted. That's not an authorization decision about a specific
+ *    ability, it's "this app can't probe abilities at all here," and the
+ *    documented abilities-first/REST-fallback contract should still hold.
+ *
+ * Runtime `permission_denied` from the abilities runtime itself (the ability
+ * exists and refused the visitor, or it isn't in the manifest's
+ * `abilities.consumes` allow-list) MUST propagate; falling back through REST
+ * would silently bypass the ability's per-visitor policy. Those errors arrive
+ * without the `manifest_permission_missing` details marker, so they fall
+ * through to the throw below.
  */
 async function tryAbilityElseRest<T>(
   abilityName: string,
@@ -481,6 +491,12 @@ async function tryAbilityElseRest<T>(
     if (err instanceof BridgeRequestError) {
       if (err.code === 'not_found' || err.code === 'not_implemented') {
         return await restCall();
+      }
+      if (err.code === 'permission_denied') {
+        const details = err.details as { reason?: unknown; permission?: unknown } | undefined;
+        if (details?.reason === 'manifest_permission_missing' && details?.permission === 'abilities') {
+          return await restCall();
+        }
       }
     }
     throw err;
