@@ -219,8 +219,140 @@ export function isBridgeError(value: unknown): value is BridgeError {
     && (BRIDGE_ERROR_CODES as readonly string[]).includes(v.code);
 }
 
+/**
+ * Canonical bridge error class. Carries the structured `{code, message,
+ * details}` shape on a real `Error` so it can be `throw`n, `instanceof`-
+ * checked, and round-tripped onto the wire without reverse-engineering
+ * object literals. Implements `BridgeError`, so anywhere a `BridgeError`
+ * is expected an instance is assignable.
+ *
+ * Throw this — never a bare `{ code, message }` literal — so `catch`
+ * blocks have exactly one shape to handle.
+ */
+export class BridgeRequestError extends Error implements BridgeError {
+  public readonly code: BridgeErrorCode;
+  public readonly details?: unknown;
+  constructor(error: BridgeError) {
+    // `.message` stays the raw bridge message: transport.ts and toBridgeError
+    // serialize it straight back onto the wire, so prefixing the code here
+    // would leak `code: message` into the public error contract.
+    super(error.message);
+    this.code = error.code;
+    this.details = error.details;
+    this.name = 'BridgeRequestError';
+  }
+}
+
+export function isBridgeRequestError(value: unknown): value is BridgeRequestError {
+  return value instanceof BridgeRequestError;
+}
+
+/**
+ * Coerce any thrown value into a structured `BridgeError`. Handles three
+ * cases the codebase actually produces:
+ *   - a `BridgeRequestError` (or any object passing `isBridgeError`)
+ *   - a plain `Error` (mapped to `internal_error`)
+ *   - anything else (stringified into `internal_error`)
+ */
+export function toBridgeError(value: unknown): BridgeError {
+  if (isBridgeError(value)) {
+    return { code: value.code, message: value.message, details: value.details };
+  }
+  if (value instanceof Error) {
+    return { code: 'internal_error', message: value.message };
+  }
+  return { code: 'internal_error', message: String(value) };
+}
+
 export function newRequestId(): string {
   return 'req_' + Math.random().toString(36).slice(2, 11);
+}
+
+// ---------------------------------------------------------------------------
+// Iframe auto-resize clamp — the host shrinks/grows a block-embed iframe to
+// the height the app reports. Bounds keep a misbehaving app from collapsing
+// to nothing or growing without limit. Shared by the client (sender) and
+// parent-bridge (receiver) so both ends agree on the range.
+// ---------------------------------------------------------------------------
+export const RESIZE_MIN_HEIGHT_PX = 100;
+export const RESIZE_MAX_HEIGHT_PX = 2000;
+
+export function clampResizeHeight(raw: number): number {
+  return Math.max(RESIZE_MIN_HEIGHT_PX, Math.min(RESIZE_MAX_HEIGHT_PX, Math.round(raw)));
+}
+
+// ---------------------------------------------------------------------------
+// Path validation — trust-boundary check shared by the client-side router
+// (router.ts) and the parent-side enforcement (parent-bridge.ts). Both ends
+// MUST agree: the parent re-runs this even if the iframe already validated,
+// because the iframe is untrusted.
+// ---------------------------------------------------------------------------
+
+/**
+ * Reserved paths a root-mounted app may not navigate into. Mirrors the
+ * server-side guard in InlineRenderer's mount handling.
+ */
+export const ROOT_RESERVED_PREFIXES = [
+  '/wp-admin/',
+  '/wp-login.php',
+  '/wp-json/',
+  '/feed',
+  '/sitemap',
+] as const;
+
+export type PathValidationResult =
+  | { ok: true; resolvedURL: string }
+  | { ok: false; reason: string };
+
+/**
+ * Validate a navigation path against an app's mount prefix and resolve it to
+ * a parent-window URL. Structured `reason`s are preserved so callers can
+ * surface a precise `invalid_params` message.
+ *
+ * `mountPrefix`:
+ *   - `null`  — block-embed / admin: no parent URL surface.
+ *   - `''`    — root-mounted: any path except WordPress-reserved prefixes.
+ *   - `/x`    — prefixed mount: resolved URL is `${mountPrefix}${rawPath}`.
+ */
+export function validatePath(
+  rawPath: unknown,
+  mountPrefix: string | null,
+): PathValidationResult {
+  if (typeof rawPath !== 'string' || rawPath === '') {
+    return { ok: false, reason: 'path must be a non-empty string' };
+  }
+  if (!rawPath.startsWith('/')) {
+    return { ok: false, reason: 'path must start with "/"' };
+  }
+  if (rawPath.includes('..') || rawPath.includes('//')) {
+    return { ok: false, reason: 'path must not contain ".." or "//"' };
+  }
+  // Reject control characters (0x00-0x1F, 0x7F).
+  if (/[\x00-\x1F\x7F]/.test(rawPath)) {
+    return { ok: false, reason: 'path must not contain control characters' };
+  }
+
+  if (mountPrefix === null) {
+    // Block-embed / admin contexts have no parent URL surface; the path is
+    // valid in the abstract sense but won't change the address bar.
+    return { ok: true, resolvedURL: rawPath };
+  }
+
+  if (mountPrefix === '') {
+    // Root-mounted: any path allowed except WP-reserved prefixes.
+    for (const reserved of ROOT_RESERVED_PREFIXES) {
+      if (rawPath === reserved.replace(/\/$/, '') || rawPath.startsWith(reserved)) {
+        return { ok: false, reason: `path "${rawPath}" is in a WordPress-reserved prefix` };
+      }
+    }
+    return { ok: true, resolvedURL: rawPath };
+  }
+
+  // Prefixed mount: the resolved URL is `${mountPrefix}${rawPath}`, except
+  // when path === '/', where we want `${mountPrefix}/` rather than
+  // `${mountPrefix}//`.
+  const resolvedURL = rawPath === '/' ? mountPrefix + '/' : mountPrefix + rawPath;
+  return { ok: true, resolvedURL };
 }
 
 // Apps-as-abilities (publish side) types ------------------------------

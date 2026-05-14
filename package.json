@@ -38,7 +38,9 @@
     "build": "rollup -c",
     "test": "vitest run --passWithNoTests",
     "test:watch": "vitest",
-    "type-check": "tsc --noEmit"
+    "type-check": "tsc --noEmit",
+    "lint": "eslint --config ../eslint.config.mjs src",
+    "format:check": "prettier --config ../.prettierrc.json --check \"src/**/*.ts\""
   },
   "devDependencies": {
     "@rollup/plugin-typescript": "^12.1.0",
@@ -48,7 +50,7 @@
     "rollup": "^4.20.0",
     "rollup-plugin-dts": "^6.1.0",
     "tslib": "^2.7.0",
-    "typescript": "^5.5.0",
+    "typescript": "^5.9.3",
     "vitest": "^4.1.5"
   }
 }

@@ -1,12 +1,5 @@
-import type { BridgeError, BridgeErrorCode } from './shared';
-
-export class BridgeRequestError extends Error implements BridgeError {
-  public readonly code: BridgeErrorCode;
-  public readonly details?: unknown;
-  constructor(error: BridgeError) {
-    super(`${error.code}: ${error.message}`);
-    this.code = error.code;
-    this.details = error.details;
-    this.name = 'BridgeRequestError';
-  }
-}
+// BridgeRequestError now lives in shared.ts so transport-side code (which
+// must not import the client entry) can throw the same canonical error
+// class. Re-exported here to keep the historical `./client-error` import
+// path stable for client.ts, router.ts, and their tests.
+export { BridgeRequestError } from './shared';

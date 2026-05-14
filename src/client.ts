@@ -1,6 +1,7 @@
 import {
   isBridgeError,
   newRequestId,
+  clampResizeHeight,
   REQUEST_TIMEOUT_MS,
   METHOD_TIMEOUTS_MS,
   type BridgeContext,
@@ -17,6 +18,7 @@ import {
   type HttpFetchResult,
 } from './shared';
 import { BridgeRequestError } from './client-error';
+import { applyBlockStyles } from './dom';
 import {
   applyExternalLocation,
   attachInlinePopstateListener,
@@ -26,8 +28,52 @@ import {
   type Location as RouterLocation,
   type NavigateOptions,
 } from './router';
+import type {
+  PostStatus,
+  PostsQuery,
+  PostContentStyles,
+  Post,
+  PostListResult,
+  SiteInfo,
+  EmailSendParams,
+  EmailSendResult,
+  MediaUploadOptions,
+  MediaUploadResult,
+  CurrentUser,
+  CommerceProduct,
+  CommerceProductsQuery,
+  CommerceProductsResult,
+  CommerceCart,
+  CheckoutHostedResult,
+} from './types';
 
 export { BridgeRequestError };
+// Re-export every domain type so the package's public type surface (and the
+// rollup .d.ts bundle) is unchanged after the move to types.ts.
+export type {
+  PostStatus,
+  PostsQuery,
+  PostContentStyles,
+  Post,
+  PostListResult,
+  SiteInfo,
+  EmailSendParams,
+  EmailSendResult,
+  MediaUploadOptions,
+  MediaUploadResult,
+  CurrentUser,
+  CommerceProductAttributeTerm,
+  CommerceProductAttribute,
+  CommerceProductVariationRef,
+  CommerceProductTaxonomyRef,
+  CommerceQuantityLimits,
+  CommerceProduct,
+  CommerceProductsQuery,
+  CommerceProductsResult,
+  CommerceCartItem,
+  CommerceCart,
+  CheckoutHostedResult,
+} from './types';
 
 declare global {
   interface Window {
@@ -110,12 +156,61 @@ async function dispatchAbility(method: string, id: string, params: unknown, targ
   }
 }
 
+/**
+ * Settle the pending promise for an incoming `dsgo:response`. Identical
+ * across both transports — only the per-transport listener differs in how
+ * it decides a message is ours (event.source check) and what else it
+ * handles (`dsgo:context`, `router:popstate`). Returns silently when the
+ * id has no pending entry (late/duplicate response).
+ */
+function settleResponse(resp: BridgeResponse): void {
+  const p = pending.get(resp.id);
+  if (!p) return;
+  pending.delete(resp.id);
+  clearTimeout(p.timer);
+  if (resp.ok) {
+    p.resolve(resp.data);
+  } else {
+    const err = isBridgeError(resp.error)
+      ? resp.error
+      : { code: 'internal_error' as BridgeErrorCode, message: 'malformed error response' };
+    p.reject(new BridgeRequestError(err));
+  }
+}
+
+/**
+ * True only when this module instance is the active handler. When
+ * vi.resetModules() accumulates stale inline listeners, only the module
+ * that last called implement() (and set __dsgoActiveToken) responds.
+ */
+function isActiveModule(): boolean {
+  return (window as unknown as Record<string | symbol, unknown>)['__dsgoActiveToken'] === _moduleToken;
+}
+
+/**
+ * Shared `dsgo:request` handling for `ability:` methods. `target` is the
+ * window ability responses are posted back to (same window inline; parent
+ * frame in iframe mode). Returns true when the request was an ability
+ * request (handled here), false otherwise so the caller can fall through
+ * to transport-specific request handling (e.g. `router:popstate`).
+ */
+function handleAbilityRequest(req: BridgeRequest, target: Window): boolean {
+  if (typeof req.method === 'string' && req.method.startsWith('ability:')) {
+    void dispatchAbility(req.method, req.id, req.params, target);
+    return true;
+  }
+  return false;
+}
+
 if (isInline) {
   // Inline mode: context is already known from the DOM script tag.
   // Messages are exchanged with the same window (postMessage target = window).
   // event.source is window in real browsers and null in jsdom.
+  if (inlineContext === null) {
+    throw new BridgeRequestError({ code: 'internal_error', message: 'inline bridge bootstrapped without a context' });
+  }
   context = inlineContext;
-  setLocationFromContext(context!);
+  setLocationFromContext(context);
   attachInlinePopstateListener();
   resolveReady();
 
@@ -127,31 +222,13 @@ if (isInline) {
     const type = (msg as BridgeMessage).type;
 
     if (type === 'dsgo:request') {
-      // Guard: only the active module instance should handle incoming ability requests.
-      // When vi.resetModules() accumulates stale inline listeners, only the module
-      // that last called implement() (and set __dsgoActiveToken) will respond.
-      if ((window as unknown as Record<string | symbol, unknown>)['__dsgoActiveToken'] !== _moduleToken) return;
-      const req = msg as BridgeRequest;
-      if (typeof req.method === 'string' && req.method.startsWith('ability:')) {
-        void dispatchAbility(req.method, req.id, req.params, window);
-      }
+      if (!isActiveModule()) return;
+      handleAbilityRequest(msg as BridgeRequest, window);
       return;
     }
 
     if (type !== 'dsgo:response') return;
-    const resp = msg as BridgeResponse;
-    const p = pending.get(resp.id);
-    if (!p) return;
-    pending.delete(resp.id);
-    clearTimeout(p.timer);
-    if (resp.ok) {
-      p.resolve(resp.data);
-    } else {
-      const err = isBridgeError(resp.error)
-        ? resp.error
-        : { code: 'internal_error' as BridgeErrorCode, message: 'malformed error response' };
-      p.reject(new BridgeRequestError(err));
-    }
+    settleResponse(msg as BridgeResponse);
   });
 } else if (isInIframe) {
   window.addEventListener('message', (event: MessageEvent<unknown>) => {
@@ -168,13 +245,11 @@ if (isInline) {
     }
 
     if (type === 'dsgo:request') {
-      // Guard: only the active module instance should handle incoming ability requests.
-      if ((window as unknown as Record<string | symbol, unknown>)['__dsgoActiveToken'] !== _moduleToken) return;
+      if (!isActiveModule()) return;
       const req = msg as BridgeRequest;
-      if (typeof req.method === 'string' && req.method.startsWith('ability:')) {
-        void dispatchAbility(req.method, req.id, req.params, window.parent);
-        return;
-      }
+      // Ability requests are shared with inline mode; only the parent-driven
+      // `router:popstate` is genuinely iframe-specific.
+      if (handleAbilityRequest(req, window.parent)) return;
       if (req.method === 'router:popstate') {
         const params = (req.params ?? {}) as Partial<RouterLocation>;
         applyExternalLocation(params);
@@ -184,19 +259,7 @@ if (isInline) {
     }
 
     if (type !== 'dsgo:response') return;
-    const resp = msg as BridgeResponse;
-    const p = pending.get(resp.id);
-    if (!p) return;
-    pending.delete(resp.id);
-    clearTimeout(p.timer);
-    if (resp.ok) {
-      p.resolve(resp.data);
-    } else {
-      const err = isBridgeError(resp.error)
-        ? resp.error
-        : { code: 'internal_error' as BridgeErrorCode, message: 'malformed error response' };
-      p.reject(new BridgeRequestError(err));
-    }
+    settleResponse(msg as BridgeResponse);
   });
 
   window.parent.postMessage({ type: 'dsgo:hello' }, '*');
@@ -226,237 +289,6 @@ async function call<T>(method: string, params?: unknown): Promise<T> {
     target.postMessage({ type: 'dsgo:request', id, method, params }, '*');
   });
 }
-
-export type PostStatus = 'publish' | 'draft' | 'private' | 'pending' | 'future' | 'any';
-
-export interface PostsQuery {
-  /**
-   * Custom post type slug. When omitted, queries the default `post` post type.
-   * The post type must be public and `show_in_rest`; the server enforces the
-   * same visibility and capability rules it would for any other REST consumer.
-   * Example: `dsgo.posts.list({ type: 'recipe', per_page: 10 })`.
-   */
-  type?: string;
-  per_page?: number;
-  page?: number;
-  search?: string;
-  category?: number | string;
-  tag?: number | string;
-  orderby?: 'date' | 'modified' | 'title' | 'id';
-  order?: 'asc' | 'desc';
-  status?: PostStatus;
-}
-
-/**
- * Block + theme stylesheets the host attaches to a post when its app's
- * manifest opts in via `content.blockStyles` / `content.themeStyles`.
- * Apps render the styles by calling `applyBlockStyles(post.content_styles)`
- * (or letting the SDK helper handle it). Always null when the manifest
- * doesn't opt in.
- */
-export interface PostContentStyles {
-  /** Absolute URLs of <link rel="stylesheet"> sheets to inject. */
-  links: string[];
-  /** Concatenated inline CSS to drop into a <style> block. */
-  inline: string;
-  /** Resolved sources, e.g. ["core","designsetgo","auto","theme:global"]. */
-  sources: string[];
-  /** Byte accounting; `used` may be less than the raw concatenation when the cap kicked in. */
-  budget: { used: number; cap: number };
-}
-
-export interface Post {
-  id: number;
-  slug: string;
-  title: string;
-  excerpt: string;
-  content: string;
-  /** Optional sibling — present only when the manifest opts in. */
-  content_styles: PostContentStyles | null;
-  status: PostStatus;
-  protected: boolean;
-  date: string;
-  modified: string;
-  author: number;
-  link: string;
-  featured_media_url: string | null;
-  categories: number[];
-  tags: number[];
-}
-
-export interface PostListResult { items: Post[]; total: number; total_pages: number }
-
-export interface SiteInfo {
-  title: string;
-  description: string;
-  url: string;
-  admin_email: string;
-  language: string;
-  timezone: string;
-  gmt_offset: number;
-  date_format: string;
-  time_format: string;
-}
-
-export interface EmailSendParams {
-  to: 'admin' | 'current_user';
-  subject: string;
-  body: string;
-  isHtml?: boolean;
-  replyTo?: string;
-}
-
-export interface EmailSendResult { sent: true }
-
-export interface MediaUploadOptions {
-  /** Override the filename used for the WP attachment. Sanitized server-side. */
-  filename?: string;
-  /** Sets the attachment's alt text (`_wp_attachment_image_alt` meta). */
-  altText?: string;
-}
-
-export interface MediaUploadResult {
-  /** WP attachment post ID. */
-  id: number;
-  /** Public URL of the uploaded file (under `wp-content/uploads/...`). */
-  url: string;
-  /** Final MIME type of the stored file, as detected by WordPress. */
-  mime_type: string;
-  /** Final on-disk filename (after collision resolution). */
-  filename: string;
-  /** Image width in pixels, or null for non-rasterized formats (e.g. SVG). */
-  width: number | null;
-  /** Image height in pixels, or null for non-rasterized formats. */
-  height: number | null;
-  /** Alt text saved against the attachment, or `""` when none was supplied. */
-  alt_text: string;
-}
-
-export interface CurrentUser {
-  id: number;
-  name: string;
-  slug: string;
-  email: string;
-  avatar_url: string;
-  roles: string[];
-}
-
-// ---------------------------------------------------------------------------
-// Commerce surface — abilities-first with REST fallback to dsgo.commerce.*
-// ---------------------------------------------------------------------------
-
-export interface CommerceProductAttributeTerm {
-  id: number;
-  name: string;
-  slug: string;
-}
-
-export interface CommerceProductAttribute {
-  id: number;
-  name: string;
-  taxonomy: string;
-  has_variations: boolean;
-  terms: CommerceProductAttributeTerm[];
-}
-
-export interface CommerceProductVariationRef {
-  id: number;
-  attributes: { name: string; value: string }[];
-}
-
-export interface CommerceProductTaxonomyRef {
-  id: number;
-  name: string;
-  slug: string;
-  link: string;
-}
-
-export interface CommerceQuantityLimits {
-  minimum: number;
-  maximum: number;
-  multiple_of: number;
-  editable: boolean;
-}
-
-export interface CommerceProduct {
-  id: number;
-  /** Parent product id when this product is a variation child; `0` otherwise. */
-  parent_id: number;
-  name: string;
-  slug: string;
-  permalink: string;
-  description: string;
-  short_description: string;
-  sku: string;
-  price: { amount: string; regular: string; sale: string; currency: string; min: string | null; max: string | null; minor_unit: number };
-  on_sale: boolean;
-  is_in_stock: boolean;
-  is_purchasable: boolean;
-  /** Units left when stock is low; `null` when not tracked or above the threshold. */
-  low_stock_remaining: number | null;
-  sold_individually: boolean;
-  images: { id: number; src: string; thumbnail: string; alt: string }[];
-  /** WC product type: `'simple' | 'variable' | 'variation' | 'grouped' | 'external'` etc. */
-  type: string;
-  /** True when the product needs additional input (e.g. variable products with attributes). */
-  has_options: boolean;
-  /** Attribute axes the visitor must pick to add a variable product to the cart. */
-  attributes: CommerceProductAttribute[];
-  /** Lightweight refs to each variation. Fetch full price/stock with `products.list({ type: 'variation', parent: id })`. */
-  variations: CommerceProductVariationRef[];
-  categories: CommerceProductTaxonomyRef[];
-  tags: CommerceProductTaxonomyRef[];
-  average_rating: string;
-  review_count: number;
-  quantity_limits: CommerceQuantityLimits | null;
-  add_to_cart: Record<string, unknown> | null;
-}
-
-export interface CommerceProductsQuery {
-  page?: number;
-  per_page?: number;
-  search?: string;
-  category?: number | string;
-  tag?: number | string;
-  min_price?: string | number;
-  max_price?: string | number;
-  orderby?: 'date' | 'price' | 'popularity' | 'rating' | 'title' | 'menu_order';
-  order?: 'asc' | 'desc';
-  on_sale?: boolean;
-  featured?: boolean;
-  /** Set to `'variation'` together with `parent` to fetch children of a variable product. */
-  type?: 'simple' | 'variable' | 'variation' | 'grouped' | 'external';
-  /** Parent product id; pair with `type: 'variation'` to fetch fully-priced variation children. */
-  parent?: number;
-  include?: number[];
-  exclude?: number[];
-  slug?: string;
-  sku?: string;
-  stock_status?: 'instock' | 'outofstock' | 'onbackorder';
-}
-
-export interface CommerceProductsResult { items: CommerceProduct[]; total: number; total_pages: number }
-
-export interface CommerceCartItem {
-  key: string;
-  id: number;
-  name: string;
-  quantity: number;
-  permalink: string;
-  image: string;
-  totals: Record<string, unknown> | null;
-}
-
-export interface CommerceCart {
-  items: CommerceCartItem[];
-  items_count: number;
-  items_weight: number;
-  totals: { total_items: string; total_price: string; currency_code: string; currency_minor_unit: number };
-  needs_shipping: boolean;
-  needs_payment: boolean;
-}
-
-export interface CheckoutHostedResult { url: string; navigated: boolean }
 
 /**
  * Try invoking a registered ability first; if no matching ability is
@@ -501,72 +333,6 @@ async function tryAbilityElseRest<T>(
     }
     throw err;
   }
-}
-
-/**
- * Inject the host's block + theme stylesheets into the current document so
- * post HTML rendered into it picks up WP's normal block styling.
- *
- * Idempotent and dedup'd: a `data-dsgo-style` attribute is stamped on every
- * inserted node with a stable key (the URL for `<link>`s, a content hash for
- * `<style>`s) so repeated calls — including ones triggered by SPA route
- * changes — never duplicate nodes.
- *
- * Returns the count of new nodes appended this call (0 when the input is
- * null/empty or all nodes were already present).
- */
-function applyBlockStyles(input: PostContentStyles | Post | null | undefined): number {
-  if (typeof document === 'undefined' || input == null) return 0;
-  const styles: PostContentStyles | null =
-    'content_styles' in (input as object)
-      ? (input as Post).content_styles
-      : (input as PostContentStyles);
-  if (!styles) return 0;
-
-  const head = document.head ?? document.getElementsByTagName('head')[0];
-  if (!head) return 0;
-
-  let appended = 0;
-  const existing = new Set<string>();
-  head.querySelectorAll('[data-dsgo-style]').forEach((el) => {
-    const k = (el as HTMLElement).getAttribute('data-dsgo-style');
-    if (k) existing.add(k);
-  });
-
-  for (const url of styles.links ?? []) {
-    if (typeof url !== 'string' || url === '') continue;
-    if (existing.has('link:' + url)) continue;
-    const link = document.createElement('link');
-    link.rel = 'stylesheet';
-    link.href = url;
-    link.setAttribute('data-dsgo-style', 'link:' + url);
-    head.appendChild(link);
-    existing.add('link:' + url);
-    appended++;
-  }
-
-  if (typeof styles.inline === 'string' && styles.inline !== '') {
-    const key = 'inline:' + cheapHash(styles.inline);
-    if (!existing.has(key)) {
-      const style = document.createElement('style');
-      style.setAttribute('data-dsgo-style', key);
-      style.textContent = styles.inline;
-      head.appendChild(style);
-      appended++;
-    }
-  }
-  return appended;
-}
-
-function cheapHash(s: string): string {
-  // FNV-1a 32-bit; collision risk doesn't matter — we only need stable
-  // dedup keys for inline-style payloads within one document.
-  let h = 0x811c9dc5;
-  for (let i = 0; i < s.length; i++) {
-    h ^= s.charCodeAt(i);
-    h = (h + ((h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24))) >>> 0;
-  }
-  return h.toString(16);
 }
 
 export const dsgo = {
@@ -754,7 +520,7 @@ export const dsgo = {
     ping: () => call<{ ok: true; bridge_version: number; server_time: string }>('bridge.ping'),
     requestResize: (height: number) => {
       if (!Number.isFinite(height)) return;
-      const clamped = Math.max(100, Math.min(2000, Math.round(height)));
+      const clamped = clampResizeHeight(height);
       if (typeof window !== 'undefined' && window.parent && window.parent !== window) {
         window.parent.postMessage({ type: 'dsgo:resize', height: clamped }, '*');
       }

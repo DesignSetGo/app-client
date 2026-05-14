@@ -17,6 +17,8 @@
 
 import { registerAbility, registerAbilityCategory, getAbilityCategory } from '@wordpress/abilities';
 import {
+  BridgeRequestError,
+  toBridgeError,
   type BridgeContext,
   type BridgeRequest,
   type BridgeResponse,
@@ -130,7 +132,7 @@ function getOrCreateEntry(appConfig: PublisherAppConfig): IframeEntry {
   let readyTimer: ReturnType<typeof setTimeout> | null = null;
   if (isHidden) {
     readyTimer = setTimeout(() => {
-      rejectReady({ code: 'app_load_failed', message: `app "${appConfig.id}" did not become ready within ${READY_TIMEOUT_MS}ms` });
+      rejectReady(new BridgeRequestError({ code: 'app_load_failed', message: `app "${appConfig.id}" did not become ready within ${READY_TIMEOUT_MS}ms` }));
     }, READY_TIMEOUT_MS);
   }
 
@@ -164,7 +166,7 @@ function teardown(entry: IframeEntry): void {
   }
   for (const [, inflight] of entry.inflight) {
     clearTimeout(inflight.timer);
-    inflight.reject({ code: 'internal_error', message: 'iframe torn down' });
+    inflight.reject(new BridgeRequestError({ code: 'internal_error', message: 'iframe torn down' }));
   }
   entries.delete(entry.appId);
 }
@@ -195,10 +197,10 @@ async function dispatch(
   }
 
   if (!implementations.includes(ability.name)) {
-    throw { code: 'ability_not_implemented', message: `app "${appConfig.id}" does not implement "${ability.name}"` };
+    throw new BridgeRequestError({ code: 'ability_not_implemented', message: `app "${appConfig.id}" does not implement "${ability.name}"` });
   }
   if (entry.inflight.size >= MAX_INFLIGHT_PER_IFRAME) {
-    throw { code: 'rate_limited', message: `too many in-flight calls to "${appConfig.id}"` };
+    throw new BridgeRequestError({ code: 'rate_limited', message: `too many in-flight calls to "${appConfig.id}"` });
   }
 
   const id = `pub_${++nextRequestId}`;
@@ -207,7 +209,7 @@ async function dispatch(
   return new Promise<unknown>((resolve, reject) => {
     const timer = setTimeout(() => {
       entry.inflight.delete(id);
-      reject({ code: 'ability_timeout', message: `"${ability.name}" exceeded ${ability.timeout_seconds}s` });
+      reject(new BridgeRequestError({ code: 'ability_timeout', message: `"${ability.name}" exceeded ${ability.timeout_seconds}s` }));
     }, ability.timeout_seconds * 1000);
 
     entry.inflight.set(id, { resolve, reject, timer });
@@ -276,7 +278,9 @@ function setupGlobalMessageListener(): void {
       if (r.ok) {
         inflight.resolve(r.data);
       } else {
-        inflight.reject({ code: r.error.code, message: r.error.message, details: r.error.details });
+        // Preserve the structured `{code, message, details}` — the registerAbility
+        // callback maps it back into a BridgeRequestError below.
+        inflight.reject(new BridgeRequestError(r.error));
       }
       resetIdle(owner);
       return;
@@ -378,8 +382,12 @@ function init(): void {
           try {
             return await dispatch(app, ability, input);
           } catch (err) {
-            const e = err as { code?: string; message?: string };
-            throw new Error(`${e.code ?? 'internal_error'}: ${e.message ?? 'ability failed'}`);
+            // Re-throw as a structured BridgeRequestError so the `code` and
+            // `details` survive — `dispatch` rejects with BridgeRequestError,
+            // but coerce anything unexpected too rather than flattening to a
+            // bare `Error("code: message")`.
+            if (err instanceof BridgeRequestError) throw err;
+            throw new BridgeRequestError(toBridgeError(err));
           }
         },
       });

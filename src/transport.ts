@@ -7,7 +7,7 @@
  */
 
 import type { BridgeRequest, BridgeResponse, BridgeErrorCode } from './shared';
-import { BRIDGE_ERROR_CODES } from './shared';
+import { BRIDGE_ERROR_CODES, BridgeRequestError } from './shared';
 
 interface WpRestErrorBody {
   code?: unknown;
@@ -18,6 +18,25 @@ interface WpRestErrorBody {
       status?: { code?: string };
     };
   };
+}
+
+/**
+ * Narrow a WP-REST rejection (which arrives as `unknown` — it could be the
+ * parsed JSON error body, a thrown `Response`, or anything else) to the
+ * `{ data: { status } }` shape used by the per-method 401 fallbacks below.
+ */
+function restStatusOf(err: unknown): number | undefined {
+  if (!err || typeof err !== 'object') return undefined;
+  const data = (err as { data?: unknown }).data;
+  if (!data || typeof data !== 'object') return undefined;
+  const status = (data as { status?: unknown }).status;
+  return typeof status === 'number' ? status : undefined;
+}
+
+/** Read a single property off an untrusted REST object without `any`. */
+function pick(obj: unknown, key: string): unknown {
+  if (!obj || typeof obj !== 'object') return undefined;
+  return (obj as Record<string, unknown>)[key];
 }
 
 export type ApiFetch = (opts: {
@@ -63,26 +82,30 @@ function makeErr(id: string, code: BridgeErrorCode, message: string): BridgeResp
 // raw WP REST responses into the typed bridge payload shapes.
 // ---------------------------------------------------------------------------
 
-function shapePost(raw: any): unknown {
+function shapePost(raw: unknown): unknown {
   if (!raw || typeof raw !== 'object') return raw;
+  const r = raw as Record<string, unknown>;
+  const title = r.title as { rendered?: unknown } | undefined;
+  const excerpt = r.excerpt as { rendered?: unknown; protected?: unknown } | undefined;
+  const content = r.content as { rendered?: unknown; protected?: unknown } | undefined;
   return {
-    id:                 raw.id,
-    slug:               raw.slug,
-    title:              raw.title?.rendered ?? '',
-    excerpt:            raw.excerpt?.rendered ?? '',
-    content:            raw.content?.rendered ?? '',
+    id:                 r.id,
+    slug:               r.slug,
+    title:              title?.rendered ?? '',
+    excerpt:            excerpt?.rendered ?? '',
+    content:            content?.rendered ?? '',
     // Sibling field; only present when the manifest opts in via
     // `content.blockStyles` / `content.themeStyles`. See class-block-styles.php.
-    content_styles:     raw.content_styles ?? null,
-    status:             raw.status,
-    protected:          raw.content?.protected ?? raw.excerpt?.protected ?? false,
-    date:               raw.date_gmt ? raw.date_gmt + 'Z' : raw.date,
-    modified:           raw.modified_gmt ? raw.modified_gmt + 'Z' : raw.modified,
-    author:             raw.author,
-    link:               raw.link,
+    content_styles:     r.content_styles ?? null,
+    status:             r.status,
+    protected:          content?.protected ?? excerpt?.protected ?? false,
+    date:               r.date_gmt ? String(r.date_gmt) + 'Z' : r.date,
+    modified:           r.modified_gmt ? String(r.modified_gmt) + 'Z' : r.modified,
+    author:             r.author,
+    link:               r.link,
     featured_media_url: null,
-    categories:         raw.categories ?? [],
-    tags:               raw.tags ?? [],
+    categories:         r.categories ?? [],
+    tags:               r.tags ?? [],
   };
 }
 
@@ -169,7 +192,12 @@ export async function handleRequest(
     const result = await routeToWp(req, { apiFetch, headers, manifest });
     return makeOk(req.id, result);
   } catch (err: unknown) {
-    // wp.apiFetch has two failure shapes:
+    // `routeToWp` itself only ever throws `BridgeRequestError` — a structured
+    // error we can map straight through without reverse-engineering a shape.
+    if (err instanceof BridgeRequestError) {
+      return makeErr(req.id, err.code, err.message);
+    }
+    // Everything else came out of `wp.apiFetch`, which has two failure shapes:
     //   1. Default (`parse: true`): rejects with the parsed JSON error body
     //      `{ code, message, data: { status } }`.
     //   2. `parse: false` (used by posts.list/pages.list to read X-WP-Total
@@ -236,7 +264,7 @@ async function routeToWp(
       // harness having to enumerate every method in the system prompt.
       const { name } = (req.params ?? {}) as { name?: string };
       if (typeof name !== 'string' || name === '') {
-        throw { code: 'invalid_params', message: 'name is required' };
+        throw new BridgeRequestError({ code: 'invalid_params', message: 'name is required' });
       }
       return await af({ path: `/dsgo/v1/apps/${manifest.id}/help/methods/${encodeURIComponent(name)}`, headers });
     }
@@ -284,17 +312,19 @@ async function routeToWp(
     }
     case 'user.current': {
       try {
-        const raw = await af({ path: '/wp/v2/users/me?context=edit', headers }) as any;
+        const raw = await af({ path: '/wp/v2/users/me?context=edit', headers });
+        const r = (raw ?? {}) as Record<string, unknown>;
+        const avatars = (r.avatar_urls ?? {}) as Record<string, unknown>;
         return {
-          id:         raw.id,
-          name:       raw.name,
-          slug:       raw.slug,
-          email:      raw.email ?? '',
-          avatar_url: raw.avatar_urls?.['96'] ?? raw.avatar_urls?.['48'] ?? raw.avatar_urls?.['24'] ?? '',
-          roles:      raw.roles ?? [],
+          id:         r.id,
+          name:       r.name,
+          slug:       r.slug,
+          email:      r.email ?? '',
+          avatar_url: avatars['96'] ?? avatars['48'] ?? avatars['24'] ?? '',
+          roles:      r.roles ?? [],
         };
-      } catch (err: any) {
-        if (err?.data?.status === 401) return null;
+      } catch (err: unknown) {
+        if (restStatusOf(err) === 401) return null;
         throw err;
       }
     }
@@ -302,16 +332,16 @@ async function routeToWp(
       const { cap } = req.params as { cap: string };
       try {
         const r = await af({ path: '/dsgo/v1/can?cap=' + encodeURIComponent(cap), headers });
-        return (r as any).can;
-      } catch (err: any) {
-        if (err?.data?.status === 401) return false;
+        return pick(r, 'can');
+      } catch (err: unknown) {
+        if (restStatusOf(err) === 401) return false;
         throw err;
       }
     }
     case 'storage.app.get': {
       const { key } = req.params as { key: string };
       const r = await af({ path: `/dsgo/v1/apps/${manifest.id}/storage/app/${encodeURIComponent(key)}`, headers });
-      return (r as any).value;
+      return pick(r, 'value');
     }
     case 'storage.app.set': {
       const { key, value } = req.params as { key: string; value: unknown };
@@ -321,7 +351,7 @@ async function routeToWp(
     case 'storage.user.get': {
       const { key } = req.params as { key: string };
       const r = await af({ path: `/dsgo/v1/apps/${manifest.id}/storage/user/${encodeURIComponent(key)}`, headers });
-      return (r as any).value;
+      return pick(r, 'value');
     }
     case 'storage.user.set': {
       const { key, value } = req.params as { key: string; value: unknown };
@@ -365,8 +395,7 @@ async function routeToWp(
       // Accept Blob (the canonical case — SVG, Canvas.toBlob, fetch().blob())
       // and File (which extends Blob, so the runtime check covers it).
       if (typeof Blob === 'undefined' || !(params.file instanceof Blob)) {
-        // eslint-disable-next-line no-throw-literal
-        throw { code: 'invalid_params', message: '"file" must be a Blob or File' };
+        throw new BridgeRequestError({ code: 'invalid_params', message: '"file" must be a Blob or File' });
       }
       const filename = typeof params.filename === 'string' && params.filename !== ''
         ? params.filename
@@ -419,6 +448,9 @@ async function routeToWp(
       });
     }
     default:
-      throw new Error('unknown method: ' + req.method);
+      // Unreachable in practice — `guardRequest` rejects unknown methods with
+      // `unknown_method` before routing — but keep it a structured error so
+      // every throw out of this function has the same shape.
+      throw new BridgeRequestError({ code: 'unknown_method', message: req.method });
   }
 }

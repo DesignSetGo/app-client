@@ -4,6 +4,11 @@ import dts from 'rollup-plugin-dts';
 // Plugin runtime bundles ship inside the free plugin at designsetgo-apps/assets/.
 // They are loaded via plugins_url('assets/<file>.js', DSGO_APPS_FILE) so the
 // rollup output path must match the on-disk plugin directory.
+//
+// These bundles are built with `sourcemap: false`: the .js files are committed
+// to the repo and shipped in the plugin, but the .map sidecars are not, so
+// emitting a `//# sourceMappingURL=` comment would just point browsers at a
+// 404. The npm `dist/` outputs below keep sourcemaps (they ship in the tarball).
 const PLUGIN_ASSETS = '../designsetgo-apps/assets';
 
 export default [
@@ -14,9 +19,9 @@ export default [
       file: `${PLUGIN_ASSETS}/bridge-client.js`,
       format: 'iife',
       name: 'DSGoAppClient',
-      sourcemap: true,
+      sourcemap: false,
     },
-    plugins: [typescript({ tsconfig: './tsconfig.json', outDir: PLUGIN_ASSETS, declaration: false, declarationMap: false })],
+    plugins: [typescript({ tsconfig: './tsconfig.json', outDir: PLUGIN_ASSETS, declaration: false, declarationMap: false, sourceMap: false })],
   },
   // IIFE: parent-bridge.js loaded on the iframe-loader page
   {
@@ -25,9 +30,9 @@ export default [
       file: `${PLUGIN_ASSETS}/parent-bridge.js`,
       format: 'iife',
       name: 'DSGoParentBridge',
-      sourcemap: true,
+      sourcemap: false,
     },
-    plugins: [typescript({ tsconfig: './tsconfig.json', outDir: PLUGIN_ASSETS, declaration: false, declarationMap: false })],
+    plugins: [typescript({ tsconfig: './tsconfig.json', outDir: PLUGIN_ASSETS, declaration: false, declarationMap: false, sourceMap: false })],
   },
   // IIFE: bridge-client-inline.js auto-injected into inline-mode apps
   {
@@ -36,9 +41,9 @@ export default [
       file: `${PLUGIN_ASSETS}/bridge-client-inline.js`,
       format: 'iife',
       name: 'DSGoAppClient',
-      sourcemap: true,
+      sourcemap: false,
     },
-    plugins: [typescript({ tsconfig: './tsconfig.json', outDir: PLUGIN_ASSETS, declaration: false, declarationMap: false })],
+    plugins: [typescript({ tsconfig: './tsconfig.json', outDir: PLUGIN_ASSETS, declaration: false, declarationMap: false, sourceMap: false })],
   },
   // IIFE: parent-bridge-inline.js loaded for inline-mode apps
   {
@@ -47,9 +52,9 @@ export default [
       file: `${PLUGIN_ASSETS}/parent-bridge-inline.js`,
       format: 'iife',
       name: 'DSGoParentBridgeInline',
-      sourcemap: true,
+      sourcemap: false,
     },
-    plugins: [typescript({ tsconfig: './tsconfig.json', outDir: PLUGIN_ASSETS, declaration: false, declarationMap: false })],
+    plugins: [typescript({ tsconfig: './tsconfig.json', outDir: PLUGIN_ASSETS, declaration: false, declarationMap: false, sourceMap: false })],
   },
   // ES module: parent-bridge-publish.js for wp-admin (imports @wordpress/abilities)
   {
@@ -57,10 +62,10 @@ export default [
     output: {
       file: `${PLUGIN_ASSETS}/parent-bridge-publish.js`,
       format: 'es',
-      sourcemap: true,
+      sourcemap: false,
     },
     external: ['@wordpress/abilities'],
-    plugins: [typescript({ tsconfig: './tsconfig.json', outDir: PLUGIN_ASSETS, declaration: false, declarationMap: false })],
+    plugins: [typescript({ tsconfig: './tsconfig.json', outDir: PLUGIN_ASSETS, declaration: false, declarationMap: false, sourceMap: false })],
   },
   // ESM npm output
   {
