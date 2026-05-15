@@ -1,6 +1,6 @@
 {
   "name": "@designsetgo/app-client",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Bridge client for DesignSetGo Apps — typed dsgo namespace for apps running inside the WP iframe runtime.",
   "license": "GPL-2.0-or-later",
   "homepage": "https://github.com/DesignSetGo/app-client#readme",
